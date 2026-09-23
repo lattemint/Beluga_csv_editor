@@ -1,0 +1,10 @@
+id,trigger,conditions,script,text,options,notes
+defaultLeave,None,Always,None,"离开
+（信标沉默，只剩静电噪声）","leave:离开
+stay:留下",通用离场
+#  ===== 分组 =====,,,,,,
+remnantDefeated,OnBattleEnd,"$faction == 'remnant'",re_SalvageHook,残骸中残留着完整的数据核心碎片。,"a:回收, 带逗号",含 "引号" 的备注
+re_beacon_ping,OnCustomEvent,Always,re_BeaconPingScript,"坐标, 又一次出现在同一片空域。",ping:回应,"尾部空格保留 "
+re_ragged_three,OnBattleEnd,只有三个字段
+,,
+re_lab_discovery,OnMarketEntered,$hasOrbitalStation == false,re_LabDiscoveryScript,轨道上没有空间站。,enter:进入,

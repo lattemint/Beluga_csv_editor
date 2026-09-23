@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe H — stale handle state on save</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeRow } from '../src/core/model.js';
+      import { App } from '../src/ui/app.js';
+
+      // Reproduces the real-browser failure:
+      //   "An operation that depends on state cached in an interface object was
+      //    made but the state had changed since it was read from disk"
+      //
+      // The other probes use a fake handle that always succeeds, so they could
+      // never hit this. This one models Chromium's per-handle snapshot: it caches
+      // size+mtime whenever getFile() runs, and createWritable() is refused once
+      // the file on disk no longer matches that cache.
+      //
+      // Every wait here is on an observed state change, never on a fixed sleep:
+      // under --virtual-time-budget a sleep can elapse before real async work
+      // (a Blob read) finishes, which silently made an earlier version of this
+      // probe report failures that were not real.
+      const checks = [];
+      const trace = [];
+      const toastLog = [];
+      const ok = (label, pass, detail = '') => {
+        checks.push(`${pass ? '✔' : '✘'} ${label}${detail ? `  — ${detail}` : ''}`);
+        return pass;
+      };
+
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof HTMLElement && node.classList.contains('toast')) {
+              toastLog.push(node.textContent ?? '');
+            }
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      async function waitUntil(predicate, label, timeout = 8000) {
+        const deadline = Date.now() + timeout;
+        for (;;) {
+          if (predicate()) return true;
+          if (Date.now() > deadline) {
+            trace.push(`TIMEOUT waiting for: ${label}`);
+            return false;
+          }
+          await sleep(25);
+        }
+      }
+      async function waitFor(selector, timeout = 8000) {
+        await waitUntil(() => document.querySelector(selector) !== null, `selector ${selector}`, timeout);
+        return document.querySelector(selector);
+      }
+      async function waitGone(selector, timeout = 8000) {
+        return waitUntil(() => document.querySelector(selector) === null, `gone ${selector}`, timeout);
+      }
+      const clickByText = (root, text) =>
+        [...root.querySelectorAll('button')].find((b) => b.textContent.includes(text));
+
+      const STALE_MESSAGE =
+        'An operation that depends on state cached in an interface object was made ' +
+        'but the state had changed since it was read from disk';
+
+      const clock = Date.UTC(2026, 8, 10, 2, 0);
+
+      function fakeHandle(name, initialText) {
+        let disk = new TextEncoder().encode(initialText);
+        let mtime = clock;
+        let cached = { size: disk.length, mtime }; // Chromium's per-handle snapshot
+        let failNext = false;
+
+        return {
+          kind: 'file',
+          name,
+          // ---- test hooks ----
+          externalWrite(text) {
+            disk = new TextEncoder().encode(text);
+            mtime += 60_000;
+            trace.push(`handle.externalWrite -> ${disk.length} bytes (snapshot now stale)`);
+          },
+          failNextCreate() {
+            failNext = true;
+            trace.push('handle.failNextCreate armed');
+          },
+          get diskText() {
+            return new TextDecoder().decode(disk);
+          },
+          // ---- File System Access surface ----
+          async getFile() {
+            cached = { size: disk.length, mtime };
+            trace.push(`getFile -> ${disk.length} bytes (snapshot refreshed)`);
+            return new File([disk], name, { type: 'text/csv', lastModified: mtime });
+          },
+          async createWritable() {
+            if (failNext || cached.size !== disk.length || cached.mtime !== mtime) {
+              failNext = false;
+              trace.push('createWritable REFUSED (stale snapshot)');
+              throw new DOMException(STALE_MESSAGE, 'InvalidStateError');
+            }
+            trace.push('createWritable ok');
+            let pending = null;
+            return {
+              async write(data) {
+                if (data instanceof Blob) pending = new Uint8Array(await data.arrayBuffer());
+                else if (data instanceof Uint8Array) pending = data;
+                else pending = new TextEncoder().encode(String(data));
+              },
+              async close() {
+                disk = pending ?? new Uint8Array(0);
+                mtime += 1000;
+                trace.push(`committed ${disk.length} bytes`);
+              },
+            };
+          },
+        };
+      }
+
+      const handle = fakeHandle(
+        'condition_gen_data.csv',
+        'id,trigger,notes\nre_a,None,第一行\nre_b,None,第二行\n',
+      );
+
+      let cancelBackupPicker = false;
+      let mutateOnPick = false;
+      window.showOpenFilePicker = async () => [handle];
+      window.showSaveFilePicker = async (options = {}) => {
+        trace.push(`showSaveFilePicker(${options.suggestedName ?? ''})`);
+        if (mutateOnPick) {
+          mutateOnPick = false;
+          handle.externalWrite('id,trigger,notes\nre_a,None,选择器打开时被改\nre_b,None,第二行\n');
+        }
+        return null; // the destination is never chosen in this scenario
+      };
+      void cancelBackupPicker;
+
+      const host = document.getElementById('app');
+      const app = new App(host, {
+        fileName: '示例（占位）',
+        filePath: null,
+        delimiter: ',',
+        encoding: 'utf-8',
+        eol: '\n',
+        trailingEol: true,
+        rows: [makeRow(['id'], ',', 1, true)],
+      });
+
+      const statusChip = () => document.querySelector('.statusbar .chip').textContent ?? '';
+      const commitCount = () => trace.filter((line) => line.includes('committed')).length;
+
+      async function editCell(row, col, value) {
+        document
+          .querySelector(`td[data-row="${row}"][data-col="${col}"]`)
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        const area = document.querySelector('.editor-area');
+        area.value = value;
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('.editor-foot .btn-primary').click();
+        await waitUntil(() => statusChip().includes('未保存'), 'cell edit marks the tab dirty');
+      }
+
+      async function startSave() {
+        clickByText(document.querySelector('.toolbar'), '保存').click();
+        await waitFor('.modal');
+      }
+
+      try {
+        // ---- open ----------------------------------------------------------
+        clickByText(document.querySelector('.toolbar'), '打开').click();
+        await waitFor('.modal');
+        document.querySelector('.modal-footer .btn-primary').click();
+        await waitGone('.modal');
+        await waitUntil(() => app.document.rows.length === 3, 'file opened');
+        ok('打开了文件', app.document.rows.length === 3, `rows=${app.document.rows.length}`);
+
+        // ---- 1. external change + backup destination never chosen ----------
+        // The old code only read the file back inside the backup branch, so with
+        // no .bak destination nothing refreshed the stale snapshot.
+        await editCell(1, 2, '甲：改过的值');
+        handle.externalWrite('id,trigger,notes\nre_a,None,别人改的\nre_b,None,第二行\n');
+
+        trace.push('--- save #1 ---');
+        const before1 = commitCount();
+        await startSave();
+        const title1 = document.querySelector('.modal-title').textContent ?? '';
+        ok('检测到外部修改并弹窗', title1.includes('外部修改'), title1);
+        clickByText(document.querySelector('.modal-footer'), '覆盖').click();
+        await waitUntil(() => commitCount() > before1, 'save #1 commits');
+        await waitUntil(() => statusChip().includes('已保存'), 'save #1 clears the dirty flag');
+        // markSaved() flips the status just before the toast is appended.
+        await waitUntil(() => toastLog.some((t) => t.includes('.bak')), 'save #1 toast');
+
+        ok('选择覆盖后保存成功', statusChip().includes('已保存'), statusChip());
+        ok('磁盘内容是本标签的改动', handle.diskText.includes('甲：改过的值'), handle.diskText.split('\n')[1]);
+        ok(
+          '没有选择备份位置时明确说明未生成 .bak',
+          toastLog.some((t) => t.includes('未生成 .bak')),
+          toastLog.filter((t) => t.includes('.bak')).join(' | ') || '(none)',
+        );
+
+        // The fix in one assertion: between the last outside change and the
+        // write there must be a snapshot refresh. Without it the cached snapshot
+        // is still the one from open time, and createWritable() is refused.
+        const idxCreate = trace.findIndex((line) => line.includes('createWritable ok'));
+        let idxRefresh = -1;
+        for (let i = idxCreate - 1; i >= 0; i -= 1) {
+          if (trace[i].includes('getFile')) {
+            idxRefresh = i;
+            break;
+          }
+        }
+        const changedInBetween = trace
+          .slice(idxRefresh + 1, idxCreate)
+          .some((line) => line.includes('externalWrite'));
+        ok(
+          '写入前刷新过句柄快照（这正是修复点）',
+          idxRefresh >= 0 && !changedInBetween,
+          idxRefresh >= 0 ? `${trace[idxRefresh]} → ${trace[idxCreate]}` : '(no refresh found)',
+        );
+
+        // ---- 2. external change + user cancels ----------------------------
+        await editCell(2, 2, '乙：不该保存的值');
+        handle.externalWrite('id,trigger,notes\nre_a,None,甲：改过的值\nre_b,None,外部第三次\n');
+
+        trace.push('--- save #2 ---');
+        const before2 = commitCount();
+        await startSave();
+        clickByText(document.querySelector('.modal-footer'), '取消').click();
+        await waitGone('.modal');
+        await sleep(80);
+
+        ok('取消后没有写入磁盘', commitCount() === before2, `commits=${commitCount() - before2}`);
+        ok('取消后磁盘仍是外部内容', handle.diskText.includes('外部第三次'), handle.diskText.split('\n')[2]);
+        ok('取消后标签仍是未保存状态', statusChip().includes('未保存'), statusChip());
+
+        // ---- 3. snapshot goes stale at write time → refresh and retry ------
+        handle.failNextCreate();
+        trace.push('--- save #3 ---');
+        const before3 = commitCount();
+        await startSave();
+        clickByText(document.querySelector('.modal-footer'), '覆盖').click();
+        await waitUntil(() => commitCount() > before3, 'save #3 commits');
+        await waitUntil(() => statusChip().includes('已保存'), 'save #3 clears the dirty flag');
+
+        ok(
+          '写入时快照失效被捕获并重试',
+          trace.some((line) => line.includes('createWritable REFUSED')),
+          '',
+        );
+        ok('重试后保存成功', statusChip().includes('已保存'), statusChip());
+        ok('磁盘内容最终是本标签的改动', handle.diskText.includes('乙：不该保存的值'), handle.diskText.split('\n')[2]);
+        ok(
+          '用户没有看到任何"保存失败"提示',
+          !toastLog.some((t) => t.includes('保存失败')),
+          toastLog.filter((t) => t.includes('保存失败')).join(' | ') || '(none)',
+        );
+
+        // ---- 4. the file changes while the backup picker is open ----------
+        await editCell(1, 2, '丙：第三次改动');
+        mutateOnPick = true;
+        trace.push('--- save #4 (file changes while the picker is open) ---');
+        const before4 = commitCount();
+        await startSave();
+        const title4 = document.querySelector('.modal-title').textContent ?? '';
+        ok('保存过程中再次变化也被拦下', title4.includes('又被修改'), title4);
+        clickByText(document.querySelector('.modal-footer'), '覆盖').click();
+        await waitUntil(() => commitCount() > before4, 'save #4 commits');
+        ok('拦截后仍可保存成功', statusChip().includes('已保存'), statusChip());
+        ok(
+          '最终落盘的是本标签的改动',
+          handle.diskText.includes('丙：第三次改动'),
+          handle.diskText.split('\n')[1],
+        );
+      } catch (error) {
+        checks.push(`✘ 探针异常：${error && error.message ? error.message : String(error)}`);
+      }
+
+      const passCount = checks.filter((line) => line.startsWith('✔')).length;
+      const failCount = checks.filter((line) => line.startsWith('✘')).length;
+
+      const panel = document.createElement('pre');
+      panel.style.cssText =
+        'position:fixed;left:12px;bottom:12px;z-index:5000;width:900px;max-height:66vh;overflow:auto;' +
+        'margin:0;padding:13px 16px;font:11.5px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;' +
+        'background:#0f172a;color:#e2e8f0;border-radius:10px;box-shadow:0 18px 44px rgba(2,6,23,.5)';
+      const report =
+        `probe H · 保存时句柄状态失效（模拟 Chromium 快照校验）\n` +
+        `通过 ${passCount} · 失败 ${failCount}\n` +
+        '─'.repeat(64) +
+        '\n' +
+        checks.join('\n') +
+        '\n' +
+        '─'.repeat(64) +
+        `\ntrace:\n  ${trace.join('\n  ')}`;
+      panel.textContent = report;
+      document.body.append(panel);
+      try {
+        await fetch('/__report?name=probe-h', { method: 'POST', body: report });
+      } catch (error) {
+        /* the on-screen panel is still there */
+      }
+    </script>
+  </body>
+</html>

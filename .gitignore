@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# frontend build output
+dist/
+
+# Tauri / Rust build output and generated schemas
+src-tauri/target/
+src-tauri/gen/
+
+# dev artifacts: self-check probe reports & screenshots, headless browser profile
+.report/
+.shot/
+.edge-profile/
+
+# unrelated tooling data (mimir-wiki backups, venue-deadlines cache, …)
+.research/
+
+# stray npm lockfile — this project uses pnpm (see pnpm-lock.yaml)
+package-lock.json
+
+# icon design scratch (candidates, .psd, intermediate renders)
+src-tauri/icons/proposals/
+
+# logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe C — edit a cell through the UI</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeRow } from '../src/core/model.js';
+      import { App } from '../src/ui/app.js';
+
+      // Drives the real UI path: click a cell, type into the bottom editor,
+      // press apply. What the screenshot shows is the app's own state, not a
+      // value we poked into the model directly.
+      const rows = [
+        makeRow(['id', 'trigger', 'text', 'notes'], ',', 1, true),
+        makeRow(['re_alpha', 'None', '第一行\n第二行', '普通行'], ',', 2, false),
+        makeRow(['re_beta', 'OnBattleEnd', '待改动的单元格', '目标行'], ',', 3, false),
+        makeRow(['re_gamma', 'None', '第三行', '末尾行'], ',', 4, false),
+      ];
+
+      new App(document.getElementById('app'), {
+        fileName: 'ui-edit-probe.csv',
+        filePath: null,
+        delimiter: ',',
+        encoding: 'utf-8',
+        eol: '\r\n',
+        trailingEol: true,
+        rows: rows,
+      });
+
+      window.setTimeout(() => {
+        const td = document.querySelector('td[data-row="2"][data-col="2"]');
+        td.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        const area = document.querySelector('.editor-area');
+        area.value = '这是通过界面改动后的值\n第二行也会保留';
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('.editor-foot .btn-primary').click();
+      }, 200);
+    </script>
+  </body>
+</html>

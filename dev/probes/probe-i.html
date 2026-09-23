@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe I — resolved theme tokens as text</title>
+    <script>
+      (function () {
+        var choice = new URLSearchParams(location.search).get('theme') || 'light';
+        try {
+          window.localStorage.setItem('csv-editor.theme', choice);
+        } catch (error) {
+          /* ignore */
+        }
+        var resolved =
+          choice === 'auto'
+            ? window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+            : choice;
+        document.documentElement.setAttribute('data-theme', resolved);
+        document.documentElement.setAttribute('data-theme-choice', choice);
+      })();
+    </script>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeSampleDocument } from '../src/core/mock.js';
+      import { App } from '../src/ui/app.js';
+
+      // Dumps the RESOLVED colour values, so a theme can be checked from text
+      // (--dump-dom) instead of from a screenshot that a text-only model cannot
+      // read. verifies the tokens actually cascade onto real elements.
+      new App(document.getElementById('app'), makeSampleDocument(60));
+
+      window.setTimeout(() => {
+        const root = getComputedStyle(document.documentElement);
+        const on = (selector, prop) => {
+          const node = document.querySelector(selector);
+          return node ? getComputedStyle(node)[prop] : '(missing)';
+        };
+        const lines = [
+          `theme attribute : ${document.documentElement.dataset.theme}`,
+          `color-scheme    : ${root.colorScheme}`,
+          '-- tokens --',
+          ...['--bg', '--panel', '--panel-2', '--text', '--muted', '--header-text',
+              '--accent', '--on-accent', '--accent-soft', '--amber', '--ok', '--danger',
+              '--grid-line', '--border', '--dot-0', '--dot-3', '--dot-7'].map(
+            (name) => `${name.padEnd(14)} = ${root.getPropertyValue(name).trim()}`,
+          ),
+          '-- applied to real elements --',
+          `body            : bg=${on('body', 'backgroundColor')} color=${on('body', 'color')}`,
+          `toolbar         : bg=${on('.toolbar', 'backgroundColor')}`,
+          `thead th        : bg=${on('.grid thead th', 'backgroundColor')} color=${on('.grid thead th', 'color')}`,
+          `active tab      : bg=${on('.tab.active', 'backgroundColor')} color=${on('.tab.active', 'color')}`,
+          `grid cell       : border-bottom=${on('.grid td', 'borderBottomColor')}`,
+          `save button     : bg=${on('.btn-primary', 'backgroundColor')} color=${on('.btn-primary', 'color')}`,
+          `dirty cell      : bg=${on('.cell-dirty', 'backgroundColor')}`,
+          `comment row     : color=${on('.row-comment td', 'color')}`,
+          `editor textarea : bg=${on('.editor-area', 'backgroundColor')}`,
+          `statusbar       : bg=${on('.statusbar', 'backgroundColor')} color=${on('.statusbar', 'color')}`,
+        ];
+        const pre = document.createElement('pre');
+        pre.id = 'token-report';
+        pre.textContent = lines.join('\n');
+        document.body.append(pre);
+        fetch(`/__report?name=probe-i-${document.documentElement.dataset.theme}`, {
+          method: 'POST',
+          body: pre.textContent,
+        }).catch(() => {
+          /* the on-screen panel is still there */
+        });
+      }, 120);
+    </script>
+  </body>
+</html>

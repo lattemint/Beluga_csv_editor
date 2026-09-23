@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>tauri spike — File System Access in WebView2</title>
+    <style>
+      body {
+        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+        background: #f5f6f8;
+        color: #1f2328;
+        padding: 24px;
+        font-size: 14px;
+      }
+      h1 { font-size: 18px; }
+      #env { color: #6b7280; margin: 8px 0 16px; font-size: 12.5px; }
+      .row { display: flex; gap: 12px; align-items: center; margin: 10px 0; }
+      button {
+        font: inherit;
+        padding: 6px 12px;
+        border: 1px solid #cfd6de;
+        border-radius: 7px;
+        background: #fff;
+        cursor: pointer;
+      }
+      button:hover { background: #f2f4f7; }
+      pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 16px;
+        border-radius: 10px;
+        white-space: pre-wrap;
+        min-height: 140px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tauri / WebView2 · File System Access spike</h1>
+    <div id="env"></div>
+    <div class="row"><button id="b1">1. showOpenFilePicker</button><span id="s1"></span></div>
+    <div class="row"><button id="b2">2. showSaveFilePicker + createWritable + 读回</button><span id="s2"></span></div>
+    <div class="row"><button id="b3">3. 同一句柄连续写两次</button><span id="s3"></span></div>
+    <div class="row"><button id="b4">4. 拖一个文件到本页</button><span id="s4"></span></div>
+    <div class="row"><button id="b5">5. localStorage 持久化</button><span id="s5"></span></div>
+    <pre id="report">把上面 5 项都做完后，把这里的全部文字粘贴回给 AI。</pre>
+    <script type="module">
+      const pre = document.getElementById('report');
+      const log = (msg) => {
+        pre.textContent = pre.textContent.includes('把上面 5 项')
+          ? msg
+          : pre.textContent + '\n' + msg;
+      };
+      const stamp = (ms) => new Date(ms).toLocaleString();
+
+      document.getElementById('env').textContent = [
+        `origin=${location.origin}`,
+        `isSecureContext=${window.isSecureContext}`,
+        `__TAURI__=${typeof window.__TAURI__ !== 'undefined'}`,
+        navigator.userAgent,
+      ].join('   ·   ');
+
+      // ---- 1. open picker ----
+      document.getElementById('b1').addEventListener('click', async () => {
+        if (typeof window.showOpenFilePicker !== 'function') {
+          log('1 ✘ showOpenFilePicker 不存在');
+          return;
+        }
+        try {
+          const handles = await window.showOpenFilePicker({ multiple: false });
+          const file = await handles[0].getFile();
+          log(`1 ✔ 打开 ${file.name} · ${file.size} bytes · mtime ${stamp(file.lastModified)}`);
+        } catch (error) {
+          log(`1 ✘ ${error.name}: ${error.message}`);
+        }
+      });
+
+      // ---- 2. save picker + write + read back ----
+      document.getElementById('b2').addEventListener('click', async () => {
+        if (typeof window.showSaveFilePicker !== 'function') {
+          log('2 ✘ showSaveFilePicker 不存在');
+          return;
+        }
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: 'tauri-spike.csv' });
+          const writable = await handle.createWritable();
+          await writable.write(new Blob(['id,note\na,spike\n'], { type: 'text/csv' }));
+          await writable.close();
+          const file = await handle.getFile();
+          const text = await file.text();
+          log(
+            text.includes('a,spike')
+              ? '2 ✔ 写入→读回一致'
+              : `2 ✘ 读回不一致: ${JSON.stringify(text)}`,
+          );
+        } catch (error) {
+          log(`2 ✘ ${error.name}: ${error.message}`);
+        }
+      });
+
+      // ---- 3. two consecutive writes on one handle ----
+      document.getElementById('b3').addEventListener('click', async () => {
+        if (typeof window.showSaveFilePicker !== 'function') {
+          log('3 ✘ showSaveFilePicker 不存在');
+          return;
+        }
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: 'tauri-spike-twice.csv' });
+          for (let i = 1; i <= 2; i += 1) {
+            try {
+              const writable = await handle.createWritable();
+              await writable.write(new Blob([`pass${i}\n`], { type: 'text/csv' }));
+              await writable.close();
+              log(`3 ✔ 第 ${i} 次写入成功`);
+            } catch (error) {
+              log(
+                `3 ✘ 第 ${i} 次写入失败: ${error.name}: ${error.message}` +
+                  '  （若含 "state had changed" 说明 WebView2 也有句柄快照校验，编辑器已有刷新+重试兜底）',
+              );
+            }
+          }
+        } catch (error) {
+          log(`3 ✘ ${error.name}: ${error.message}`);
+        }
+      });
+
+      // ---- 4. drag & drop ----
+      document.addEventListener('dragover', (event) => event.preventDefault());
+      document.addEventListener('drop', async (event) => {
+        event.preventDefault();
+        const item = event.dataTransfer && event.dataTransfer.items ? event.dataTransfer.items[0] : null;
+        if (!item) {
+          log('4 ✘ 没有拖入文件');
+          return;
+        }
+        if (typeof item.getAsFileSystemHandle !== 'function') {
+          log('4 ✘ DataTransferItem.getAsFileSystemHandle 不存在');
+          const plain = event.dataTransfer.files[0];
+          if (plain) log(`4   兜底可用: files[0]=${plain.name} · ${plain.size} bytes（编辑器需补此兜底）`);
+          return;
+        }
+        try {
+          const handle = await item.getAsFileSystemHandle();
+          log(
+            handle
+              ? `4 ✔ getAsFileSystemHandle OK · kind=${handle.kind} · name=${handle.name}`
+              : '4 ✘ getAsFileSystemHandle 返回 null',
+          );
+        } catch (error) {
+          log(`4 ✘ ${error.name}: ${error.message}`);
+        }
+      });
+
+      // ---- 5. localStorage ----
+      document.getElementById('b5').addEventListener('click', () => {
+        try {
+          const key = 'tauri-spike-load-count';
+          const count = Number(localStorage.getItem(key) ?? '0') + 1;
+          localStorage.setItem(key, String(count));
+          log(`5 ✔ 已写入第 ${count} 次。刷新页面：若下方计数继续 +1 说明持久化可用`);
+        } catch (error) {
+          log(`5 ✘ localStorage 不可用: ${error.message}`);
+        }
+      });
+
+      try {
+        const count = Number(localStorage.getItem('tauri-spike-load-count') ?? '0');
+        if (count > 0) log(`5 ℹ 本次加载前计数为 ${count}（≥1 即说明上次写入的 localStorage 还在）`);
+      } catch {
+        /* ignore */
+      }
+    </script>
+  </body>
+</html>

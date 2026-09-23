@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe B — open / delimiter detection dialog</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { showOpenDialog } from '../src/ui/dialogs.js';
+
+      showOpenDialog({
+        fileName: 'rules.csv（示例数据）',
+        candidates: [
+          { value: ',', glyph: ',', label: '逗号 comma', columns: 7, consistent: true, recommended: true, note: '列数一致' },
+          { value: ';', glyph: ';', label: '分号 semicolon', columns: 1, consistent: false, recommended: false, note: '列数不一致' },
+          { value: '\t', glyph: 'Tab', label: '制表符 tab', columns: 1, consistent: false, recommended: false, note: '列数不一致' },
+          { value: '|', glyph: '|', label: '竖线 pipe', columns: 1, consistent: false, recommended: false, note: '列数不一致' },
+        ],
+        encoding: 'utf-8',
+        eol: '\r\n',
+        previewLines: [
+          'id,trigger,conditions,script,text,options,notes',
+          'defaultLeave,None,Always,None,"离开（信标沉默，只剩静电噪声）","leave:离开|stay:留下",通用离场',
+          "remnantDefeated,OnBattleEnd,\"$faction == 'remnant'\",re_SalvageHook,残骸中残留着完整的数据核心碎片。,a:回收|b:销毁,含逗号与引号",
+          're_beacon_ping,OnCustomEvent,Always,re_BeaconPingScript,"坐标, 又一次出现在同一片空域。",ping:回应|ignore:无视,引号内的换行',
+          '#  ===== 分组 =====,,,,,,',
+          ',,,,,,',
+          're_lab_discovery,OnMarketEntered,$hasOrbitalStation == false,re_LabDiscoveryScript,轨道上没有空间站，只有一座被遗弃的研究设施。,enter:进入,',
+        ],
+        note: '原型示意：分隔符检测算法（按列数一致性打分）在第 2 步实现，下面是近似预览。',
+      });
+    </script>
+  </body>
+</html>

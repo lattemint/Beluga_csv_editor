@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe G — multi-tab: same-name disambiguation, per-tab state, close</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeRow } from '../src/core/model.js';
+      import { App } from '../src/ui/app.js';
+
+      // Drives the real UI against a stubbed File System Access API to check the
+      // multi-tab behaviours that are easy to get wrong: telling two same-named
+      // files apart, keeping per-tab state isolated, and closing a dirty tab.
+      const checks = [];
+      const trace = [];
+      const toastLog = [];
+      const ok = (label, pass, detail = '') => {
+        checks.push(`${pass ? '✔' : '✘'} ${label}${detail ? `  — ${detail}` : ''}`);
+        return pass;
+      };
+
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof HTMLElement && node.classList.contains('toast')) {
+              toastLog.push(node.textContent ?? '');
+            }
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      async function waitFor(selector, timeout = 6000) {
+        const deadline = Date.now() + timeout;
+        for (;;) {
+          const found = document.querySelector(selector);
+          if (found) return found;
+          if (Date.now() > deadline) throw new Error(`timeout waiting for ${selector}`);
+          await sleep(25);
+        }
+      }
+      const clickByText = (root, text) =>
+        [...root.querySelectorAll('button')].find((b) => b.textContent.includes(text));
+
+      function fakeHandle(name, text, lastModified) {
+        const bytes = new TextEncoder().encode(text);
+        let current = bytes;
+        return {
+          kind: 'file',
+          name,
+          async getFile() {
+            return new File([current], name, { type: 'text/csv', lastModified });
+          },
+          async createWritable() {
+            let pending = null;
+            return {
+              async write(data) {
+                if (data instanceof Blob) pending = new Uint8Array(await data.arrayBuffer());
+                else if (data instanceof Uint8Array) pending = data;
+                else pending = new TextEncoder().encode(String(data));
+              },
+              async close() {
+                current = pending ?? new Uint8Array(0);
+                trace.push(`committed ${name} (${current.length} bytes)`);
+              },
+            };
+          },
+        };
+      }
+
+      // Two DIFFERENT files that happen to share a basename — the case the user
+      // explicitly asked to be able to tell apart.
+      const textA = 'id,trigger,notes\nA_ONE,None,文件甲第一行\nA_TWO,None,文件甲第二行\n';
+      const textB =
+        'id,trigger,notes\nB_ONE,None,文件乙第一行\nB_TWO,None,文件乙第二行\nB_THREE,None,文件乙第三行\nB_FOUR,None,文件乙第四行\n';
+
+      const handleA = fakeHandle('rules.csv', textA, Date.UTC(2026, 8, 9, 6, 22));
+      const handleB = fakeHandle('rules.csv', textB, Date.UTC(2026, 8, 10, 1, 5));
+      const openQueue = [handleA, handleB, handleA];
+
+      window.showOpenFilePicker = async () => {
+        const next = openQueue.length > 0 ? openQueue.shift() : handleA;
+        trace.push(`showOpenFilePicker -> ${next ? next.name : 'empty'}`);
+        return next ? [next] : [];
+      };
+      window.showSaveFilePicker = async () => handleA;
+
+      const host = document.getElementById('app');
+      const app = new App(host, {
+        fileName: '示例（占位）',
+        filePath: null,
+        delimiter: ',',
+        encoding: 'utf-8',
+        eol: '\n',
+        trailingEol: true,
+        rows: [makeRow(['id'], ',', 1, true)],
+      });
+
+      const tabLabels = () =>
+        [...document.querySelectorAll('.tab .tab-label')].map((n) => n.textContent ?? '');
+      const tabDotsVisible = () =>
+        [...document.querySelectorAll('.tab .tab-dot')].map((n) => !n.classList.contains('hidden-dot'));
+      const tabDirtyFlags = () =>
+        [...document.querySelectorAll('.tab')].map((t) => t.querySelector('.tab-dirty') !== null);
+
+      async function openOne() {
+        clickByText(document.querySelector('.toolbar'), '打开').click();
+        await waitFor('.modal');
+        document.querySelector('.modal-footer .btn-primary').click();
+        await sleep(80);
+      }
+
+      try {
+        // ---- 1. two same-named files ---------------------------------------
+        await openOne();
+        ok('第一次打开替换掉了示例标签', app.sessionCount === 1, `sessions=${app.sessionCount}`);
+        await openOne();
+        ok('第二次打开新增一个标签', app.sessionCount === 2, `sessions=${app.sessionCount}`);
+
+        const labels = tabLabels();
+        ok('两个同名标签的显示文本不同', labels.length === 2 && labels[0] !== labels[1], labels.join('  ||  '));
+        ok(
+          '同名标签带上了 mtime/size 后缀',
+          labels.length === 2 &&
+            labels.every((text) => / · \d\d-\d\d \d\d:\d\d · \d+(\.\d+)? (B|KB|MB)$/.test(text)),
+          labels.join('  ||  '),
+        );
+        ok('同名标签显示了区分用色点', tabDotsVisible().every(Boolean), JSON.stringify(tabDotsVisible()));
+
+        // ---- 2. per-tab isolation ------------------------------------------
+        // Tab 2 is active: edit a cell there.
+        document
+          .querySelector('td[data-row="1"][data-col="2"]')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        const area = document.querySelector('.editor-area');
+        area.value = '在乙文件里改的';
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('.editor-foot .btn-primary').click();
+        await sleep(60);
+
+        ok('改动只作用在当前标签', app.document.rows[1].cells[2].value === '在乙文件里改的');
+        const dirtyAfterEdit = tabDirtyFlags();
+        ok('只有当前标签显示脏标记', !dirtyAfterEdit[0] && dirtyAfterEdit[1], JSON.stringify(dirtyAfterEdit));
+
+        // Put a search in tab 2, then switch to tab 1.
+        const search = document.querySelector('.search-input');
+        search.value = 'B_TWO';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(40);
+        const matchesInB = document.querySelector('.match-info').textContent ?? '';
+        ok('搜索在乙标签里生效', matchesInB.includes('匹配'), matchesInB);
+
+        document.querySelectorAll('.tab')[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        await sleep(60);
+
+        ok('切到甲标签后行数是甲文件的', app.document.rows.length === 3, `rows=${app.document.rows.length}`);
+        ok('甲标签的搜索框是空的（每标签独立）', search.value === '', JSON.stringify(search.value));
+        ok(
+          '甲标签没有脏标记',
+          (document.querySelector('.statusbar .chip').textContent ?? '').includes('已保存'),
+          document.querySelector('.statusbar .chip').textContent ?? '',
+        );
+
+        document.querySelectorAll('.tab')[1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        await sleep(60);
+        ok('切回乙标签搜索词被恢复', search.value === 'B_TWO', JSON.stringify(search.value));
+        ok('切回乙标签仍是脏的', !tabDirtyFlags()[0] && tabDirtyFlags()[1]);
+
+        // ---- 3. close a dirty tab ------------------------------------------
+        document.querySelectorAll('.tab')[1].querySelector('.tab-close').click();
+        await waitFor('.modal');
+        const dialogText = document.querySelector('.modal-body').textContent ?? '';
+        ok('关闭脏标签会先询问', dialogText.includes('未保存改动'), dialogText.slice(0, 40));
+        clickByText(document.querySelector('.modal-footer'), '直接关闭').click();
+        await sleep(120);
+        ok('选择丢弃后标签被关闭', app.sessionCount === 1, `sessions=${app.sessionCount}`);
+
+        // ---- 4. Alt+W closes the active tab --------------------------------
+        await openOne();
+        ok('再次打开后是 2 个标签', app.sessionCount === 2, `sessions=${app.sessionCount}`);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', altKey: true, bubbles: true }));
+        await sleep(120);
+        ok('Alt+W 关闭了当前标签', app.sessionCount === 1, `sessions=${app.sessionCount}`);
+
+        // ---- 5. rename via double click ------------------------------------
+        await openOne();
+        const secondTab = document.querySelectorAll('.tab')[1];
+        secondTab.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        const rename = await waitFor('.tab-rename');
+        rename.value = '乙文件';
+        rename.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await sleep(80);
+        ok('双击重命名生效', tabLabels().includes('乙文件'), tabLabels().join(' | '));
+        ok('重命名后另一个标签不再需要后缀', tabLabels()[0] === 'rules.csv', tabLabels()[0] ?? '(none)');
+        ok(
+          '重命名后色点隐藏（标签已可区分）',
+          tabDotsVisible().every((visible) => visible === false),
+          JSON.stringify(tabDotsVisible()),
+        );
+      } catch (error) {
+        // Counted as a failure, not just traced, so the totals cannot lie.
+        checks.push(`✘ 探针异常：${error && error.message ? error.message : String(error)}`);
+      }
+
+      const passCount = checks.filter((line) => line.startsWith('✔')).length;
+      const failCount = checks.filter((line) => line.startsWith('✘')).length;
+
+      const panel = document.createElement('pre');
+      panel.style.cssText =
+        'position:fixed;left:12px;bottom:12px;z-index:5000;width:820px;max-height:62vh;overflow:auto;' +
+        'margin:0;padding:13px 16px;font:11.5px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;' +
+        'background:#0f172a;color:#e2e8f0;border-radius:10px;box-shadow:0 18px 44px rgba(2,6,23,.5)';
+      panel.textContent =
+        `probe G · 多标签：同名区分 / 每标签状态 / 关闭与重命名\n` +
+        `通过 ${passCount} · 失败 ${failCount} · 标签数 ${app.sessionCount}\n` +
+        '─'.repeat(62) +
+        '\n' +
+        checks.join('\n') +
+        '\n' +
+        '─'.repeat(62) +
+        `\ntrace:\n  ${trace.join('\n  ') || '(empty)'}` +
+        `\ntoasts:\n  ${toastLog.join('\n  ') || '(none)'}`;
+      document.body.append(panel);
+      try {
+        await fetch('/__report?name=probe-g', { method: 'POST', body: panel.textContent });
+      } catch (error) {
+        /* the on-screen panel is still there */
+      }
+    </script>
+  </body>
+</html>

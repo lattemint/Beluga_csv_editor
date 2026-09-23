@@ -1,0 +1,29 @@
+{
+  "name": "beluga-csv-editor",
+  "private": true,
+  "version": "0.1.1",
+  "license": "MIT",
+  "type": "module",
+  "description": "Web-based CSV editor for Starsector mod data files. Byte-faithful RFC 4180 round-trip, multiline cells, delimiter auto-detection.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5178",
+    "build:offline": "node --disable-warning=ExperimentalWarning scripts/build-offline.mjs",
+    "serve": "node scripts/serve.mjs",
+    "start": "node scripts/build-offline.mjs && node scripts/serve.mjs",
+    "test": "node tests/roundtrip.test.ts",
+    "diagnose": "node dev/diagnose-roundtrip.ts",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^22.20.2",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

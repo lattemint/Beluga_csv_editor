@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe A — ragged / comment / blank / quoted rows + context menu</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeRow } from '../src/core/model.js';
+      import { App } from '../src/ui/app.js';
+      import { showContextMenu } from '../src/ui/dialogs.js';
+
+      // A deliberately tiny document that puts every fidelity edge case on one
+      // screen: header row, multiline cell, '#' comment row, all-empty spacer
+      // row, two ragged rows, and a cell with commas + quotes + trailing space.
+      const rows = [
+        makeRow(['id', 'trigger', 'conditions', 'script', 'text', 'notes'], ',', 1, true),
+        makeRow(
+          ['re_alpha', 'None', 'Always', 'None', '第一行内容\n第二行内容\n第三行内容', '普通多行单元格'],
+          ',',
+          2,
+          false,
+        ),
+        makeRow(['#  ===== 分组 =====', '', '', '', '', ''], ',', 3, false),
+        makeRow(new Array(6).fill(''), ',', 4, false),
+        makeRow(['re_ragged_three', 'OnBattleEnd', '这一行只有三个字段'], ',', 5, false),
+        makeRow(
+          ['re_quoted_cell', 'None', 'Always', 'None', '含,逗号 以及 "引号" 的字段', '尾部空格保留 '],
+          ',',
+          6,
+          false,
+        ),
+        makeRow(['re_ragged_four', 'None', 'Always', 'NoScript'], ',', 7, false),
+      ];
+
+      new App(document.getElementById('app'), {
+        fileName: 'ragged-probe.csv',
+        filePath: null,
+        delimiter: ',',
+        encoding: 'utf-8',
+        eol: '\r\n',
+        trailingEol: true,
+        rows: rows,
+      });
+
+      window.setTimeout(() => {
+        showContextMenu(470, 250, [
+          { label: '编辑此格', hint: 'F2', action() {} },
+          { label: '复制单元格内容', action() {} },
+          { label: '清空此格', action() {} },
+          { label: '-', action() {} },
+          { label: '在上方插入行', action() {} },
+          { label: '在下方插入行', action() {} },
+          { label: '删除此行', danger: true, action() {} },
+          { label: '-', action() {} },
+          { label: '在右侧插入列', action() {} },
+          { label: '删除此列', danger: true, action() {} },
+        ]);
+      }, 250);
+    </script>
+  </body>
+</html>

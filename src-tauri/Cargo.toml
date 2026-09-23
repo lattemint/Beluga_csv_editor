@@ -1,0 +1,24 @@
+[package]
+name = "beluga-csv-editor"
+version = "0.1.1"
+description = "Web-based CSV editor for Starsector mod data files"
+license = "MIT"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "beluga_csv_editor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 路线 B（若 File System Access 在 WebView2 实测不通）再启用这两个插件：
+# tauri-plugin-dialog = "2"
+# tauri-plugin-fs = "2"

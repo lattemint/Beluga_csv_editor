@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe F — theme check</title>
+    <script>
+      // Same pre-paint resolution as index.html, except ?theme= wins so a
+      // screenshot run can pick a theme. It is also written to localStorage, so
+      // the App's normal readThemeChoice() path is what actually applies it.
+      (function () {
+        var choice = new URLSearchParams(location.search).get('theme') || 'light';
+        try {
+          window.localStorage.setItem('csv-editor.theme', choice);
+        } catch (error) {
+          /* ignore */
+        }
+        var resolved =
+          choice === 'auto'
+            ? window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+            : choice;
+        document.documentElement.setAttribute('data-theme', resolved);
+        document.documentElement.setAttribute('data-theme-choice', choice);
+      })();
+    </script>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeSampleDocument } from '../src/core/mock.js';
+      import { App } from '../src/ui/app.js';
+
+      new App(document.getElementById('app'), makeSampleDocument(160));
+    </script>
+  </body>
+</html>

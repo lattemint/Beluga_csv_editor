@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Beluga CSV Editor</title>
+    <script>
+      // Resolve the saved theme BEFORE the stylesheet lands, so a dark-theme user
+      // never sees a white flash. Mirrors src/ui/theme.ts.
+      (function () {
+        var resolved = 'light';
+        var choice = 'auto';
+        try {
+          choice = window.localStorage.getItem('csv-editor.theme') || 'auto';
+          resolved = choice;
+          if (choice === 'auto') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+        } catch (error) {
+          resolved = 'light';
+          choice = 'auto';
+        }
+        document.documentElement.setAttribute('data-theme', resolved);
+        document.documentElement.setAttribute('data-theme-choice', choice);
+      })();
+    </script>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

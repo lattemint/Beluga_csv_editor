@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe E — real file open / edit / save / .bak through the UI</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { makeRow } from '../src/core/model.js';
+      import { parseCsvBytes } from '../src/core/parse.js';
+      import { serializeCsvBytes } from '../src/core/serialize.js';
+      import { App } from '../src/ui/app.js';
+
+      // Drives the real UI against a stubbed File System Access API, so the whole
+      // open -> parse -> edit -> save -> .bak chain runs in a browser without a
+      // human clicking a native file picker.
+      const checks = [];
+      const trace = [];
+      const toastLog = [];
+      const ok = (label, pass, detail = '') => {
+        checks.push(`${pass ? '✔' : '✘'} ${label}${detail ? `  — ${detail}` : ''}`);
+        return pass;
+      };
+
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof HTMLElement && node.classList.contains('toast')) {
+              toastLog.push(node.textContent ?? '');
+            }
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      async function waitFor(selector, timeout = 6000) {
+        const deadline = Date.now() + timeout;
+        for (;;) {
+          const found = document.querySelector(selector);
+          if (found) return found;
+          if (Date.now() > deadline) throw new Error(`timeout waiting for ${selector}`);
+          await sleep(25);
+        }
+      }
+      async function waitUntil(predicate, label, timeout = 6000) {
+        const deadline = Date.now() + timeout;
+        for (;;) {
+          if (predicate()) return true;
+          if (Date.now() > deadline) {
+            trace.push(`TIMEOUT waiting: ${label}`);
+            return false;
+          }
+          await sleep(20);
+        }
+      }
+      const clickByText = (root, text) =>
+        [...root.querySelectorAll('button')].find((b) => b.textContent.includes(text));
+
+      const bytesEqual = (a, b) => {
+        if (!a || !b || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+        return true;
+      };
+
+      const sampleText = await (await fetch('./fixtures/probe-sample.csv')).text();
+      const originalBytes = new TextEncoder().encode(sampleText);
+      const writes = [];
+      const pickerCalls = [];
+
+      // A File built without lastModified reports Date.now() on every call, which
+      // looks like an outside edit. Real files have a stable timestamp.
+      const FIXED_MTIME = Date.UTC(2026, 8, 10, 3, 0);
+
+      function fakeHandle(name, initial) {
+        let bytes = initial;
+        return {
+          kind: 'file',
+          name,
+          async getFile() {
+            trace.push(`getFile(${name})`);
+            return new File([bytes], name, { type: 'text/csv', lastModified: FIXED_MTIME });
+          },
+          async createWritable() {
+            trace.push(`createWritable(${name})`);
+            let pending = null;
+            return {
+              async write(data) {
+                trace.push(`write(${name}, ${data && typeof data.size === 'number' ? data.size : typeof data})`);
+                if (data instanceof Blob) pending = new Uint8Array(await data.arrayBuffer());
+                else if (data instanceof Uint8Array) pending = data;
+                else pending = new TextEncoder().encode(String(data));
+              },
+              async close() {
+                trace.push(`close(${name})`);
+                bytes = pending ?? new Uint8Array(0);
+                writes.push({ name, bytes });
+              },
+            };
+          },
+        };
+      }
+
+      const csvHandle = fakeHandle('probe-sample.csv', originalBytes);
+      const bakHandle = fakeHandle('probe-sample.csv.bak', new Uint8Array(0));
+
+      window.showOpenFilePicker = async () => [csvHandle];
+      window.showSaveFilePicker = async (options = {}) => {
+        const name = options.suggestedName ?? '';
+        pickerCalls.push(name);
+        trace.push(`showSaveFilePicker(${name})`);
+        return name.endsWith('.bak') ? bakHandle : csvHandle;
+      };
+
+      const host = document.getElementById('app');
+      const app = new App(host, {
+        fileName: '示例（占位）',
+        filePath: null,
+        delimiter: ',',
+        encoding: 'utf-8',
+        eol: '\n',
+        trailingEol: true,
+        rows: [makeRow(['id'], ',', 1, true)],
+      });
+
+      try {
+        // ---- 1. Open through the UI ---------------------------------------
+        clickByText(document.querySelector('.toolbar'), '打开').click();
+        await waitFor('.modal');
+        document.querySelector('.modal-footer .btn-primary').click();
+        await waitUntil(() => app.document.rows.length === 8, 'doc row count');
+        await sleep(30);
+
+        const doc = app.document;
+        ok('打开后记录数正确', doc.rows.length === 8, `rows=${doc.rows.length}`);
+        ok(
+          '编码/分隔符/换行正确',
+          doc.encoding === 'utf-8' && doc.delimiter === ',',
+          `${doc.encoding} / ${JSON.stringify(doc.delimiter)} / ${JSON.stringify(doc.eol)}`,
+        );
+        ok('表头识别为 header', doc.rows[0].kind === 'header');
+        ok('# 行识别为注释', doc.rows[2].kind === 'comment', JSON.stringify(doc.rows[2].cells[0].value));
+        ok('全空行识别为 blank', doc.rows[6].kind === 'blank');
+        ok(
+          '单元格内换行被保留',
+          doc.rows[1].cells[4].value.includes('\n'),
+          JSON.stringify(doc.rows[1].cells[4].value),
+        );
+        ok(
+          '引号内逗号属于字段',
+          doc.rows[3].cells[5].value === 'a:回收, 带逗号',
+          JSON.stringify(doc.rows[3].cells[5].value),
+        );
+        ok(
+          '引号内尾部空格未被 trim',
+          doc.rows[4].cells[6].value === '尾部空格保留 ',
+          JSON.stringify(doc.rows[4].cells[6].value),
+        );
+        ok('ragged 行保持 3 个字段', doc.rows[5].cells.length === 3, `cells=${doc.rows[5].cells.length}`);
+
+        // Sanity: the serializer itself must be callable from here.
+        try {
+          const direct = serializeCsvBytes(doc);
+          ok('serializeCsvBytes 可直接调用', direct.length > 0, `${direct.length} bytes`);
+        } catch (error) {
+          ok('serializeCsvBytes 可直接调用', false, String(error));
+        }
+
+        // ---- 2. Save with no edits: bytes must be identical ----------------
+        clickByText(document.querySelector('.toolbar'), '保存').click();
+        await waitUntil(() => writes.length >= 2, 'first save (csv + .bak written)');
+        await sleep(30);
+
+        ok('未改动时保存结果与原文件逐字节一致', writes.length >= 2 && bytesEqual(writes[1].bytes, originalBytes));
+        ok('第一次保存写了 .bak', writes.length >= 2 && writes[0].name === 'probe-sample.csv.bak');
+        ok('  .bak 内容就是保存前的原文件', writes.length >= 2 && bytesEqual(writes[0].bytes, originalBytes));
+        ok(
+          '备份文件名按 <文件>.bak 生成',
+          pickerCalls.includes('probe-sample.csv.bak'),
+          pickerCalls.join(' | ') || '(none)',
+        );
+
+        // ---- 3. Edit one cell through the UI -----------------------------
+        const editRow = 1;
+        const editCol = 6;
+        document
+          .querySelector(`td[data-row="${editRow}"][data-col="${editCol}"]`)
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        const area = document.querySelector('.editor-area');
+        area.value = '改过的备注';
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('.editor-foot .btn-primary').click();
+        await sleep(30);
+        ok('界面编辑后该单元格值为新值', app.document.rows[editRow].cells[editCol].value === '改过的备注');
+
+        // ---- 4. Save again: only that cell may change --------------------
+        const beforeEdit = writes.length >= 2 ? writes[1].bytes : null;
+        clickByText(document.querySelector('.toolbar'), '保存').click();
+        await waitUntil(() => writes.length >= 4, 'second save (two more writes)');
+        await sleep(30);
+
+        ok('第二次保存也写了 .bak', writes.length === 4, `writes=${writes.length}`);
+        ok(
+          '第二次 .bak 内容等于上一次保存的内容',
+          writes.length === 4 && bytesEqual(writes[2].bytes, beforeEdit),
+        );
+
+        if (writes.length === 4) {
+          const before = parseCsvBytes(writes[1].bytes, 'before.csv').doc;
+          const after = parseCsvBytes(writes[3].bytes, 'after.csv').doc;
+          let mismatches = 0;
+          for (let r = 0; r < before.rows.length; r += 1) {
+            const a = before.rows[r].cells;
+            const b = after.rows[r].cells;
+            if (a.length !== b.length) {
+              mismatches += 1;
+              continue;
+            }
+            for (let c = 0; c < a.length; c += 1) {
+              if (r === editRow && c === editCol) continue;
+              if (a[c].value !== b[c].value) mismatches += 1;
+            }
+          }
+          ok('除改动的单元格外，其余单元格完全不变', mismatches === 0, `mismatches=${mismatches}`);
+          ok('改动已落盘', after.rows[editRow].cells[editCol].value === '改过的备注');
+        }
+      } catch (error) {
+        trace.push(`PROBE EXCEPTION: ${error && error.message ? error.message : String(error)}`);
+      }
+
+      const passCount = checks.filter((line) => line.startsWith('✔')).length;
+      const failCount = checks.filter((line) => line.startsWith('✘')).length;
+
+      const panel = document.createElement('pre');
+      panel.style.cssText =
+        'position:fixed;right:12px;bottom:12px;z-index:5000;width:760px;max-height:60vh;overflow:auto;' +
+        'margin:0;padding:13px 16px;font:11.5px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;' +
+        'background:#0f172a;color:#e2e8f0;border-radius:10px;box-shadow:0 18px 44px rgba(2,6,23,.5)';
+      panel.textContent =
+        `probe E · 真实文件 打开/编辑/保存/.bak 端到端\n` +
+        `通过 ${passCount} · 失败 ${failCount} · 写盘次数 ${writes.length} · picker 调用 ${pickerCalls.length}\n` +
+        '─'.repeat(60) +
+        '\n' +
+        checks.join('\n') +
+        '\n' +
+        '─'.repeat(60) +
+        `\ntrace:\n  ${trace.join('\n  ') || '(empty)'}` +
+        `\ntoasts:\n  ${toastLog.join('\n  ') || '(none)'}`;
+      document.body.append(panel);
+      try {
+        await fetch('/__report?name=probe-e', { method: 'POST', body: panel.textContent });
+      } catch (error) {
+        /* the on-screen panel is still there */
+      }
+    </script>
+  </body>
+</html>
