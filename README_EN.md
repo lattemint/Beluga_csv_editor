@@ -16,7 +16,7 @@ Beluga CSV Editor is a desktop CSV editor for Starsector mod data files — buil
 
 ## Highlights
 
-- **Byte fidelity**: cells you don't touch are written back exactly, quotes and line endings included (131 real mod files verified byte-for-byte)
+- **Byte fidelity**: cells you don't touch are written back exactly, quotes and line endings included
 - **Multi-tab**: same-named files are disambiguated by mtime / size / source path
 - **External-change detection**: disk state is checked before saving; if another program changed the file, you get a prompt instead of a silent overwrite
 - **Backup**: the current on-disk contents are saved to `.bak` before saving
@@ -24,7 +24,8 @@ Beluga CSV Editor is a desktop CSV editor for Starsector mod data files — buil
 
 ## Tech stack
 
-TypeScript + Vite frontend; Tauri 2 (Rust) desktop shell; no backend — all data stays local.
+TypeScript + Vite frontend;
+Tauri 2 (Rust) desktop shell.
 
 ## Build / install
 
@@ -77,8 +78,8 @@ pnpm start    # zero-dependency offline build + static server (requires Node 24)
 ## Testing
 
 ```bash
-pnpm typecheck   # type check
-pnpm test        # byte-fidelity regression (131 real files compared byte-for-byte)
+pnpm typecheck 
+pnpm test
 ```
 
 ## Contributing

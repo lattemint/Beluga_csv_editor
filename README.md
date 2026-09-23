@@ -17,7 +17,7 @@ Beluga CSV Editor 是一个面向 Starsector mod 数据文件的桌面 CSV 编�
 
 ## 特性速览
 
-- **字节保真**：没碰过的单元格连引号、行尾符都原样写回（131 个真实 mod 文件语料逐字节校验）
+- **字节保真**：没碰过的单元格连引号、行尾符都原样写回
 - **多标签**：同名文件用修改时间 / 大小 / 来源路径区分
 - **外部改动检测**：保存前检查磁盘状态，文件被别的程序改过会提示，避免误覆盖
 - **备份**：保存前把磁盘上的当前内容另存为 `.bak`
@@ -25,7 +25,8 @@ Beluga CSV Editor 是一个面向 Starsector mod 数据文件的桌面 CSV 编�
 
 ## 技术栈
 
-TypeScript + Vite 前端；Tauri 2（Rust）桌面外壳；零后端，数据全部留在本地。
+TypeScript + Vite 前端；
+Tauri 2（Rust）桌面外壳。
 
 ## 编译 / 安装
 
@@ -78,8 +79,8 @@ pnpm start    # 零依赖离线构建 + 静态服务器（需 Node 24）
 ## 测试
 
 ```bash
-pnpm typecheck   # 类型检查
-pnpm test        # 字节保真回归（131 个真实文件逐字节比对）
+pnpm typecheck 
+pnpm test 
 ```
 
 ## 贡献
