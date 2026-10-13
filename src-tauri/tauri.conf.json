@@ -33,7 +33,7 @@
     "resources": ["../LICENSE"],
     "license": "MIT",
     "licenseFile": "../LICENSE",
-    "publisher": "Neko Soul",
+    "publisher": "LatteMint",
     "copyright": "Copyright (c) 2026 Beluga CSV Editor contributors",
     "shortDescription": "字节级保真的 CSV 编辑器",
     "icon": [
