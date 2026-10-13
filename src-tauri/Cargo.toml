@@ -1,6 +1,6 @@
 [package]
 name = "beluga-csv-editor"
-version = "0.1.1"
+version = "0.1.2"
 description = "Web-based CSV editor for Starsector mod data files"
 license = "MIT"
 edition = "2021"

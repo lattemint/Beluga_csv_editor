@@ -39,6 +39,13 @@ export class DocumentSession {
   loadedText: string | null = null;
 
   /**
+   * Where the document came from: 'sample' is the built-in demo (never written
+   * over anything), 'blank' is a brand-new file with no location yet, 'file' is
+   * something opened from disk.
+   */
+  origin: 'file' | 'sample' | 'blank' = 'file';
+
+  /**
    * On-disk identity as loaded. The File System Access API exposes no path, so
    * these two are the only real signals to tell same-named files apart.
    * Deliberately NOT refreshed on save, so tab labels stay stable.
@@ -112,7 +119,12 @@ export class DocumentSession {
 
   /** True when this session holds the built-in sample rather than a real file. */
   get isSample(): boolean {
-    return this.loadedText === null;
+    return this.origin === 'sample';
+  }
+
+  /** True for a brand-new document that has never been written anywhere yet. */
+  get isBlank(): boolean {
+    return this.origin === 'blank';
   }
 
   get canWriteInPlace(): boolean {

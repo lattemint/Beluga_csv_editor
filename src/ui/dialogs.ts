@@ -289,6 +289,17 @@ export interface MenuItem {
 }
 
 let openMenu: HTMLElement | null = null;
+/**
+ * The window listeners a context menu installs. They MUST be removed when the
+ * menu closes: a leftover listener from a previous menu sees the next menu's
+ * click as "outside my own (now detached) menu" and closes that menu during
+ * mousedown, so its click never fires — every menu after the first would be
+ * silently dead.
+ */
+let menuListeners: {
+  down: (event: MouseEvent) => void;
+  key: (event: KeyboardEvent) => void;
+} | null = null;
 
 export function showContextMenu(x: number, y: number, items: readonly MenuItem[]): void {
   closeContextMenu();
@@ -325,13 +336,20 @@ export function showContextMenu(x: number, y: number, items: readonly MenuItem[]
   const onKey = (event: KeyboardEvent) => {
     if (event.key === 'Escape') closeContextMenu();
   };
-  window.setTimeout(() => {
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-  }, 0);
+  // Attach right away: the menu is opened from a `contextmenu` event, so the
+  // mousedown that preceded it has already been dispatched. Capture phase makes
+  // this run before the grid's own handlers.
+  menuListeners = { down: onDown, key: onKey };
+  window.addEventListener('mousedown', onDown, true);
+  window.addEventListener('keydown', onKey, true);
 }
 
 export function closeContextMenu(): void {
+  if (menuListeners) {
+    window.removeEventListener('mousedown', menuListeners.down, true);
+    window.removeEventListener('keydown', menuListeners.key, true);
+    menuListeners = null;
+  }
   if (!openMenu) return;
   openMenu.remove();
   openMenu = null;

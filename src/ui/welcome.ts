@@ -10,6 +10,7 @@ import { t } from './i18n.ts';
 import { el } from './dom.ts';
 
 export interface WelcomeHooks {
+  onNewFile(): void;
   onOpenFile(): void;
   onSample(): void;
   onLanguage(): void;
@@ -25,6 +26,12 @@ export function renderWelcome(host: HTMLElement, hooks: WelcomeHooks): void {
     descKey: MessageKey;
     action: () => void;
   }[] = [
+    {
+      icon: '🆕',
+      labelKey: 'welcome.new',
+      descKey: 'welcome.newDesc',
+      action: hooks.onNewFile,
+    },
     {
       icon: '📂',
       labelKey: 'welcome.open',
@@ -72,7 +79,7 @@ export function renderWelcome(host: HTMLElement, hooks: WelcomeHooks): void {
       grid,
       el('p', {
         class: 'welcome-foot',
-        text: `${t('welcome.version', { v: '0.1.1' })} · ${t('app.dropHint')}`,
+        text: `${t('welcome.version', { v: '0.1.2' })} · ${t('app.dropHint')}`,
       }),
     ]),
   );

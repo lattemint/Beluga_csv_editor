@@ -1,7 +1,7 @@
 {
   "name": "beluga-csv-editor",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "MIT",
   "type": "module",
   "description": "Web-based CSV editor for Starsector mod data files. Byte-faithful RFC 4180 round-trip, multiline cells, delimiter auto-detection.",

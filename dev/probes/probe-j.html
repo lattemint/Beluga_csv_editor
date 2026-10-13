@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe J — new file / clear / range selection / context menu</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { App } from '../src/ui/app.js';
+
+      const lines = [];
+      let pass = 0;
+      let fail = 0;
+      function check(name, ok, extra = '') {
+        if (ok) {
+          pass += 1;
+          lines.push(`PASS  ${name}`);
+        } else {
+          fail += 1;
+          lines.push(`FAIL  ${name}${extra ? '  → ' + extra : ''}`);
+        }
+      }
+
+      const $ = (sel) => document.querySelector(sel);
+      const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+      function mouse(el, type, init = {}) {
+        el.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init }),
+        );
+      }
+      /** Full press on a menu entry: mousedown (where the old bug killed the menu) then click. */
+      function pressMenuItem(el) {
+        mouse(el, 'mousedown');
+        const alive = document.body.contains(el);
+        mouse(el, 'mouseup');
+        mouse(el, 'click');
+        return alive;
+      }
+      function rightClick(td) {
+        const rect = td.getBoundingClientRect();
+        mouse(td, 'contextmenu', {
+          clientX: Math.round(rect.left + 8),
+          clientY: Math.round(rect.top + 8),
+        });
+      }
+      function menuItem(text) {
+        return $$('.context-menu .menu-item').find((b) => b.textContent.includes(text)) ?? null;
+      }
+      function cell(row, col) {
+        return $(`.grid tbody td.cell[data-row="${row}"][data-col="${col}"]`);
+      }
+      function clickCell(row, col) {
+        const td = cell(row, col);
+        const rect = td.getBoundingClientRect();
+        mouse(td, 'mousedown', {
+          clientX: Math.round(rect.left + 6),
+          clientY: Math.round(rect.top + 6),
+        });
+        mouse(window, 'mouseup');
+        return td;
+      }
+      function applyPanel(value) {
+        const area = $('.editor-area');
+        area.value = value;
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        const btn = $$('.editor-foot .btn').find((b) => b.textContent.includes('应用'));
+        mouse(btn, 'click');
+        return btn;
+      }
+
+      try {
+        const app = new App($('#app'));
+        const doc = () => app.document;
+
+        // ---------------------------------------------------- 1. welcome + new file
+        const cardText = $$('.welcome-option').map((b) => b.textContent);
+        check('1 欢迎页出现"新建文件"卡片', cardText.some((t) => t.includes('新建文件')));
+        check('1b 欢迎页仍有"打开文件"卡片', cardText.some((t) => t.includes('打开文件')));
+
+        const newCard = $$('.welcome-option').find((b) => b.textContent.includes('新建文件'));
+        mouse(newCard, 'click');
+        check('2 新建后会话数为 1', app.sessionCount === 1, `count=${app.sessionCount}`);
+        check('3 新文档有 2 行（表头 + 数据）', doc().rows.length === 2, `rows=${doc().rows.length}`);
+        check('4 新文档每行 3 列', doc().rows.every((r) => r.cells.length === 3));
+        check('5 网格渲染 3 个列头', $$('.grid thead th.col-head').length === 3);
+        check('5b 欢迎页已隐藏', $('.welcome-host').classList.contains('hidden'));
+        check('5c 通道徽章显示"新建"', ($('.proto-badge')?.textContent ?? '').includes('新建'));
+
+        // ---------------------------------------------------- 2. context menu, first use
+        mouse(cell(1, 0), 'mousedown');
+        rightClick(cell(1, 0));
+        check('6 第一次右键打开菜单', !!$('.context-menu'));
+        const first = menuItem('插入行') ?? menuItem('在下方');
+        check('6b 菜单里有行操作', !!first);
+        const alive1 = pressMenuItem(first);
+        check('6c 菜单项按下时菜单未被误关（第 1 次）', alive1);
+        check('7 插入行生效 → 3 行', doc().rows.length === 3, `rows=${doc().rows.length}`);
+
+        // ---------------------------------------------------- 3. write a value, then clear via menu (2nd menu = the regression)
+        clickCell(1, 0);
+        applyPanel('hello');
+        check('8 面板写入生效', doc().rows[1].cells[0].value === 'hello', `v="${doc().rows[1].cells[0].value}"`);
+
+        rightClick(cell(1, 0));
+        check('9 第二次右键打开菜单', !!$('.context-menu'));
+        const clearItem = menuItem('清空此格');
+        check('9b 菜单里有"清空此格"', !!clearItem);
+        const alive2 = clearItem ? pressMenuItem(clearItem) : false;
+        check('9c 菜单项按下时菜单未被误关（第 2 次，核心回归点）', alive2);
+        check('10 第二次菜单的"清空此格"生效', doc().rows[1].cells[0].value === '', `v="${doc().rows[1].cells[0].value}"`);
+
+        // ---------------------------------------------------- 4. Delete key clears
+        clickCell(1, 1);
+        applyPanel('delete-me');
+        check('11 预置待删除内容', doc().rows[1].cells[1].value === 'delete-me');
+        $('.grid-scroll').dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }),
+        );
+        check('12 Delete 键清空单元格', doc().rows[1].cells[1].value === '', `v="${doc().rows[1].cells[1].value}"`);
+
+        // ---------------------------------------------------- 5. drag range select
+        mouse(cell(1, 0), 'mousedown', {
+          clientX: Math.round(cell(1, 0).getBoundingClientRect().left + 6),
+          clientY: Math.round(cell(1, 0).getBoundingClientRect().top + 6),
+        });
+        const target = cell(2, 1).getBoundingClientRect();
+        mouse(window, 'mousemove', {
+          clientX: Math.round(target.left + 6),
+          clientY: Math.round(target.top + 6),
+        });
+        mouse(window, 'mouseup');
+        const inRange = $$('.cell.sel-range').length;
+        check('13 拖拽划选出 4 格（2×2）', inRange === 4, `sel-range=${inRange}`);
+
+        // ---------------------------------------------------- 6. apply to range
+        const applyBtn = applyPanel('BULK');
+        check('14 按钮变为"应用到选区"', (applyBtn?.textContent ?? '').includes('应用到选区'), applyBtn?.textContent);
+        const bulk = [doc().rows[1].cells[0].value, doc().rows[1].cells[1].value, doc().rows[2].cells[0].value, doc().rows[2].cells[1].value];
+        check('15 整块写入 4 格', bulk.every((v) => v === 'BULK'), bulk.join('|'));
+
+        // ---------------------------------------------------- 7. clear the whole block
+        $('.grid-scroll').dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }),
+        );
+        const after = [doc().rows[1].cells[0].value, doc().rows[1].cells[1].value, doc().rows[2].cells[0].value, doc().rows[2].cells[1].value];
+        check('16 Delete 清空整个选区', after.every((v) => v === ''), after.join('|'));
+
+        // ---------------------------------------------------- 8. tab menu twice (same leak class)
+        rightClick(cell(2, 0));
+        const menuAlive3 = !!$('.context-menu');
+        mouse(window, 'mousedown', { clientX: 5, clientY: 5 });
+        rightClick(cell(2, 0));
+        check('17 菜单可反复开关（第 3 次）', menuAlive3 && !!$('.context-menu'));
+
+        // ---------------------------------------------------- 9. undo unwinds the bulk clear
+        $('.grid-scroll').dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }),
+        );
+        const undoCount = [doc().rows[1].cells[0], doc().rows[1].cells[1], doc().rows[2].cells[0], doc().rows[2].cells[1]]
+          .filter((c) => c.value === 'BULK').length;
+        check('18 Ctrl+Z 逐格回退批量清空', undoCount === 1, `restored=${undoCount}`);
+      } catch (error) {
+        fail += 1;
+        lines.push(`FAIL  探针异常：${error && error.stack ? error.stack : error}`);
+      }
+
+      const report = `probe-j: ${pass} passed, ${fail} failed\n\n${lines.join('\n')}\n`;
+      document.title = fail === 0 ? `PROBE-J-PASS ${pass}` : `PROBE-J-FAIL ${fail}`;
+      const pre = document.createElement('pre');
+      pre.id = 'report';
+      pre.textContent = report;
+      document.body.append(pre);
+      try {
+        await fetch('/__report?name=probe-j', { method: 'POST', body: report });
+      } catch (error) {
+        /* the DOM copy still carries the result */
+      }
+    </script>
+  </body>
+</html>

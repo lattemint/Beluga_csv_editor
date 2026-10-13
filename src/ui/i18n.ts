@@ -213,7 +213,7 @@ const zh = {
 
   'about.title': '关于 Beluga CSV Editor',
   'about.body':
-    '版本 0.1.1\n\n主要创作者：DeepSeek AI（deepseek-v4-pro）\n在用户LatteMint的测试与需求指导下开发\n\n许可证：MIT License\n（完整文本见项目 LICENSE 文件）\n\n为 Starsector mod 数据文件打造的 CSV 编辑器：\n保证未改动的内容逐字节写回原文件。',
+    '版本 0.1.2\n\n主要创作者：DeepSeek AI（deepseek-v4-pro）\n在用户LatteMint的测试与需求指导下开发\n\n许可证：MIT License\n（完整文本见项目 LICENSE 文件）\n\n为 Starsector mod 数据文件打造的 CSV 编辑器：\n保证未改动的内容逐字节写回原文件。',
 
   'grid.absent': '此行在原文件中只有 {n} 个字段',
   'grid.mlBadge': '{n} 行内容',
@@ -222,6 +222,24 @@ const zh = {
   'grid.flagDirty': '已修改',
   'grid.resize': '拖动调整列宽',
   'col.placeholder': '列 {n}',
+
+  // --- new file / clear / range selection ---
+  'welcome.new': '新建文件',
+  'welcome.newDesc': '从空白表格开始（保存时再选位置）',
+  'toolbar.new': '新建',
+  'toolbar.newTitle': '新建 CSV（Alt+N）',
+  'hint.altN': 'Alt+N',
+  'newDoc.name': '未命名.csv',
+  'channel.blank': '新建 · 未保存',
+  'cellMenu.clearRange': '清空选区（{n} 格）',
+  'editor.clear': '清空',
+  'editor.clearTitle': '清空选中单元格（Delete）',
+  'editor.applyRange': '应用到选区（{n} 格）',
+  'editor.rangeTitle': '已选 {rows} 行 × {cols} 列 · 共 {cells} 格（R{r0}:C{c0} → R{r1}:C{c1}）',
+  'editor.hintRange': '编辑后点「应用到选区」整片写入；Delete 清空',
+  'op.cleared': '已清空 {n} 格',
+  'op.copied': '已复制 {n} 格',
+  'op.newCreated': '已新建空白文件',
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
@@ -425,7 +443,7 @@ const en: Record<keyof typeof zh, string> = {
 
   'about.title': 'About Beluga CSV Editor',
   'about.body':
-    "Version 0.1.1\n\nMain author: DeepSeek AI (deepseek-v4-pro)\nDeveloped with the LatteMint's testing and direction\n\nLicense: MIT License\n(full text in the project's LICENSE file)\n\nA CSV editor for Starsector mod data files that\nguarantees untouched content is written back byte for byte.",
+    "Version 0.1.2\n\nMain author: DeepSeek AI (deepseek-v4-pro)\nDeveloped with LatteMint's testing and direction\n\nLicense: MIT License\n(full text in the project's LICENSE file)\n\nA CSV editor for Starsector mod data files that\nguarantees untouched content is written back byte for byte.",
 
   'grid.absent': 'This row has only {n} field(s) in the source file',
   'grid.mlBadge': '{n} lines',
@@ -434,6 +452,24 @@ const en: Record<keyof typeof zh, string> = {
   'grid.flagDirty': 'changed',
   'grid.resize': 'Drag to resize',
   'col.placeholder': 'Column {n}',
+
+  // --- new file / clear / range selection ---
+  'welcome.new': 'New file',
+  'welcome.newDesc': 'Start from an empty table (pick a location when saving)',
+  'toolbar.new': 'New',
+  'toolbar.newTitle': 'New CSV (Alt+N)',
+  'hint.altN': 'Alt+N',
+  'newDoc.name': 'untitled.csv',
+  'channel.blank': 'New · unsaved',
+  'cellMenu.clearRange': 'Clear {n} cell(s)',
+  'editor.clear': 'Clear',
+  'editor.clearTitle': 'Clear the selected cell(s) (Delete)',
+  'editor.applyRange': 'Apply to {n} cells',
+  'editor.rangeTitle': 'Selected {rows} rows × {cols} cols · {cells} cells (R{r0}:C{c0} → R{r1}:C{c1})',
+  'editor.hintRange': 'Edit, then Apply to write the whole block; Delete clears it',
+  'op.cleared': 'Cleared {n} cell(s)',
+  'op.copied': 'Copied {n} cell(s)',
+  'op.newCreated': 'Created a blank file',
 };
 
 export type MessageKey = keyof typeof zh;

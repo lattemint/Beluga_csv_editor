@@ -715,6 +715,15 @@ body {
 }
 .cell.selected.cell-dirty { box-shadow: inset 0 0 0 2px var(--accent), inset 4px 0 0 0 var(--amber-line); }
 
+/* Range selection: tint the whole block, outline only the two corners. Native
+   text selection is off inside the grid so a drag selects cells, not glyphs. */
+.grid-scroll { user-select: none; -webkit-user-select: none; }
+.cell.sel-range,
+.cell.sel-range.cell-dirty,
+.cell.sel-range.cell-quoted { box-shadow: none; }
+.cell.sel-range.sel-anchor,
+.cell.sel-range.sel-focus { box-shadow: inset 0 0 0 2px var(--accent); }
+
 .ml-badge {
   float: right;
   margin-left: 6px;

@@ -27,6 +27,23 @@ export interface GridHooks {
   onActivate(row: number, col: number): void;
   onContextMenu(row: number, col: number, clientX: number, clientY: number): void;
   onTypeToEdit?: (row: number, col: number, initial: string) => void;
+  /** Delete/Backspace pressed on the grid: clear the current selection. */
+  onClear?: () => void;
+  /** Ctrl+C pressed on the grid: copy the current selection. */
+  onCopy?: () => void;
+  /** The selection rectangle changed (used for the "N cells selected" readout). */
+  onSelectionChange?: () => void;
+}
+
+/** A rectangular block of document cells, corners inclusive. */
+export interface GridRange {
+  r0: number;
+  c0: number;
+  r1: number;
+  c1: number;
+  rows: number;
+  cols: number;
+  cells: number;
 }
 
 /** Rough display width in monospace cells; CJK counts as two. */
@@ -62,6 +79,10 @@ export class GridView {
   private posOf = new Map<number, number>();
   private selectedRow = 0;
   private selectedCol = 0;
+  /** The other corner of the selection rectangle; equals the focus for one cell. */
+  private anchorRow = 0;
+  private anchorCol = 0;
+  private dragging = false;
   private renderedStart = -1;
   private renderedEnd = -1;
   private editor: HTMLTextAreaElement | null = null;
@@ -190,6 +211,12 @@ export class GridView {
     this.visible.forEach((docIndex, pos) => this.posOf.set(docIndex, pos));
     if (!this.posOf.has(this.selectedRow)) {
       this.selectedRow = this.visible.length > 0 ? this.visible[0] : 0;
+      this.anchorRow = this.selectedRow;
+      this.anchorCol = this.selectedCol;
+    }
+    if (!this.posOf.has(this.anchorRow)) {
+      this.anchorRow = this.selectedRow;
+      this.anchorCol = this.selectedCol;
     }
     this.invalidate();
     this.renderWindow();
@@ -291,7 +318,11 @@ export class GridView {
     if (cell.value.length === 0) classes.push('cell-empty');
     if (cell.dirty) classes.push('cell-dirty');
     if (cell.quoted) classes.push('cell-quoted');
-    if (col === this.selectedCol && docIndex === this.selectedRow) classes.push('selected');
+    const range = this.selectionRange;
+    if (docIndex >= range.r0 && docIndex <= range.r1 && col >= range.c0 && col <= range.c1) {
+      classes.push('selected');
+      if (range.cells > 1) classes.push('sel-range');
+    }
 
     const lines = lineCount(cell.value);
     if (lines > 1) classes.push('cell-multiline');
@@ -320,9 +351,23 @@ export class GridView {
   }
 
   private paintSelection(): void {
-    for (const td of this.tbody.querySelectorAll('td.selected')) td.classList.remove('selected');
-    const td = this.cellElement(this.selectedRow, this.selectedCol);
-    if (td) td.classList.add('selected');
+    const range = this.selectionRange;
+    for (const node of this.tbody.querySelectorAll('td.cell')) {
+      const td = node as HTMLTableCellElement;
+      const row = Number(td.getAttribute('data-row'));
+      const col = Number(td.getAttribute('data-col'));
+      const inRange = row >= range.r0 && row <= range.r1 && col >= range.c0 && col <= range.c1;
+      td.classList.toggle('selected', inRange);
+      td.classList.toggle('sel-range', inRange && range.cells > 1);
+      td.classList.toggle(
+        'sel-anchor',
+        range.cells > 1 && row === this.anchorRow && col === this.anchorCol,
+      );
+      td.classList.toggle(
+        'sel-focus',
+        range.cells > 1 && row === this.selectedRow && col === this.selectedCol,
+      );
+    }
 
     for (const th of this.table.querySelectorAll('th.col-head.current')) th.classList.remove('current');
     const th = this.table.querySelector(`th.col-head[data-col="${this.selectedCol}"]`);
@@ -333,21 +378,68 @@ export class GridView {
     return { row: this.selectedRow, col: this.selectedCol };
   }
 
-  select(docIndex: number, col: number, notify = true): void {
+  /** The selected block, corners inclusive (a single cell when nothing is dragged). */
+  get selectionRange(): GridRange {
+    const r0 = Math.min(this.anchorRow, this.selectedRow);
+    const r1 = Math.max(this.anchorRow, this.selectedRow);
+    const c0 = Math.min(this.anchorCol, this.selectedCol);
+    const c1 = Math.max(this.anchorCol, this.selectedCol);
+    return {
+      r0,
+      c0,
+      r1,
+      c1,
+      rows: r1 - r0 + 1,
+      cols: c1 - c0 + 1,
+      cells: (r1 - r0 + 1) * (c1 - c0 + 1),
+    };
+  }
+
+  select(docIndex: number, col: number, notify = true, extend = false): void {
+    const maxCol = Math.max(0, this.widths.length - 1);
+    this.selectedRow = docIndex;
+    this.selectedCol = Math.max(0, Math.min(maxCol, col));
+    if (!extend) {
+      this.anchorRow = this.selectedRow;
+      this.anchorCol = this.selectedCol;
+    }
+    if (this.posOf.has(this.selectedRow)) this.ensureVisible(this.selectedRow, this.selectedCol);
+    this.paintSelection();
+    if (notify) {
+      this.hooks.onSelect(this.selectedRow, this.selectedCol);
+      this.hooks.onSelectionChange?.();
+    }
+  }
+
+  /** Grow the selection to a new focus cell, keeping the anchor (drag / Shift+arrow). */
+  extendTo(docIndex: number, col: number): void {
     const maxCol = Math.max(0, this.widths.length - 1);
     this.selectedRow = docIndex;
     this.selectedCol = Math.max(0, Math.min(maxCol, col));
     if (this.posOf.has(this.selectedRow)) this.ensureVisible(this.selectedRow, this.selectedCol);
     this.paintSelection();
-    if (notify) this.hooks.onSelect(this.selectedRow, this.selectedCol);
+    // No onSelect here: that would re-enter the app on every mousemove.
+    this.hooks.onSelectionChange?.();
+  }
+
+  selectAll(): void {
+    if (this.visible.length === 0 || this.widths.length === 0) return;
+    this.anchorRow = this.visible[0];
+    this.anchorCol = 0;
+    this.selectedRow = this.visible[this.visible.length - 1];
+    this.selectedCol = this.widths.length - 1;
+    this.paintSelection();
+    this.hooks.onSelect(this.selectedRow, this.selectedCol);
+    this.hooks.onSelectionChange?.();
   }
 
   /** Move by view position, so arrow keys follow the filtered list. */
-  moveSelection(rowDelta: number, colDelta: number): void {
+  moveSelection(rowDelta: number, colDelta: number, extend = false): void {
     const currentPos = this.posOf.get(this.selectedRow) ?? 0;
     const nextPos = Math.max(0, Math.min(this.visible.length - 1, currentPos + rowDelta));
     const nextRow = this.visible[nextPos] ?? this.selectedRow;
-    this.select(nextRow, this.selectedCol + colDelta);
+    if (extend) this.extendTo(nextRow, this.selectedCol + colDelta);
+    else this.select(nextRow, this.selectedCol + colDelta);
   }
 
   moveToEdge(rowDelta: number): void {
@@ -392,9 +484,44 @@ export class GridView {
     if (event.target instanceof Element && event.target.closest('.col-resizer')) return;
     const hit = this.locate(event.target);
     if (!hit) return;
-    if (hit.row === this.selectedRow && hit.col === this.selectedCol) return;
-    this.select(hit.row, hit.col);
+
+    if (event.button !== 0) {
+      // Right/middle button: keep an existing range so the context menu can act
+      // on the whole block; only move the selection when clicking outside it.
+      const range = this.selectionRange;
+      const inside =
+        hit.row >= range.r0 && hit.row <= range.r1 && hit.col >= range.c0 && hit.col <= range.c1;
+      if (!inside) this.select(hit.row, hit.col);
+      return;
+    }
+
+    // Left button: start a drag-select. preventDefault stops the browser from
+    // turning the drag into a text selection.
+    event.preventDefault();
+    if (!this.isEditing) this.scroller.focus();
+    this.select(hit.row, hit.col, true, event.shiftKey);
+    this.dragging = true;
+    window.addEventListener('mousemove', this.onDragMove);
+    window.addEventListener('mouseup', this.onDragEnd);
   }
+
+  private readonly onDragMove = (event: MouseEvent): void => {
+    if (!this.dragging) return;
+    const under = document.elementFromPoint(event.clientX, event.clientY);
+    const hit = this.locate(under);
+    if (!hit) return;
+    if (hit.row === this.selectedRow && hit.col === this.selectedCol) return;
+    this.extendTo(hit.row, hit.col);
+  };
+
+  private readonly onDragEnd = (): void => {
+    if (!this.dragging) return;
+    this.dragging = false;
+    window.removeEventListener('mousemove', this.onDragMove);
+    window.removeEventListener('mouseup', this.onDragEnd);
+    this.hooks.onSelect(this.selectedRow, this.selectedCol);
+    this.hooks.onSelectionChange?.();
+  };
 
   private handleDoubleClick(event: MouseEvent): void {
     const hit = this.locate(event.target);
@@ -407,7 +534,12 @@ export class GridView {
     const hit = this.locate(event.target);
     if (!hit) return;
     event.preventDefault();
-    this.select(hit.row, hit.col);
+    // Right-clicking inside the selection keeps it (so "clear selection" works);
+    // right-clicking elsewhere moves the selection to that cell.
+    const range = this.selectionRange;
+    const inside =
+      hit.row >= range.r0 && hit.row <= range.r1 && hit.col >= range.c0 && hit.col <= range.c1;
+    if (!inside) this.select(hit.row, hit.col);
     this.hooks.onContextMenu(hit.row, hit.col, event.clientX, event.clientY);
   }
 
@@ -418,16 +550,25 @@ export class GridView {
 
     if (key === 'ArrowDown') {
       event.preventDefault();
-      this.moveSelection(1, 0);
+      this.moveSelection(1, 0, shift);
     } else if (key === 'ArrowUp') {
       event.preventDefault();
-      this.moveSelection(-1, 0);
+      this.moveSelection(-1, 0, shift);
     } else if (key === 'ArrowRight') {
       event.preventDefault();
-      this.moveSelection(0, 1);
+      this.moveSelection(0, 1, shift);
     } else if (key === 'ArrowLeft') {
       event.preventDefault();
-      this.moveSelection(0, -1);
+      this.moveSelection(0, -1, shift);
+    } else if (key === 'Delete' || key === 'Backspace') {
+      event.preventDefault();
+      this.hooks.onClear?.();
+    } else if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'a') {
+      event.preventDefault();
+      this.selectAll();
+    } else if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'c') {
+      event.preventDefault();
+      this.hooks.onCopy?.();
     } else if (key === 'Tab') {
       event.preventDefault();
       this.moveSelection(0, shift ? -1 : 1);

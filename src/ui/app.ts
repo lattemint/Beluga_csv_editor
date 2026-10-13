@@ -67,7 +67,7 @@ import {
   toast,
 } from './dialogs.ts';
 import { el } from './dom.ts';
-import { GridView, lineCount } from './grid.ts';
+import { GridView, lineCount, type GridRange } from './grid.ts';
 import type { MessageKey } from './i18n.ts';
 import {
   getLanguage,
@@ -101,6 +101,8 @@ const EMPTY_DOC: CsvDocument = {
 interface UiRefs {
   fileName: HTMLElement;
   dirtyChip: HTMLElement;
+  newBtn: HTMLButtonElement;
+  newLabel: HTMLElement;
   openBtn: HTMLButtonElement;
   openLabel: HTMLElement;
   saveBtn: HTMLButtonElement;
@@ -130,6 +132,7 @@ interface UiRefs {
   editorFlags: HTMLElement;
   editorArea: HTMLTextAreaElement;
   editorApply: HTMLButtonElement;
+  editorClear: HTMLButtonElement;
   editorRevert: HTMLButtonElement;
   editorHint: HTMLElement;
   status: HTMLElement;
@@ -143,6 +146,10 @@ function buildUi(root: HTMLElement): UiRefs {
   const fileName = el('span', { class: 'file-name' });
   const dirtyChip = el('span', { class: 'chip chip-dirty hidden', text: t('chip.unsaved') });
 
+  const newLabel = el('span', { text: t('toolbar.new') });
+  const newBtn = el('button', { class: 'btn', type: 'button', title: t('toolbar.newTitle') }, [
+    newLabel,
+  ]);
   const openLabel = el('span', { text: t('toolbar.open') });
   const openBtn = el('button', { class: 'btn', type: 'button', title: t('toolbar.openTitle') }, [
     el('span', { class: 'btn-key', text: 'Ctrl+O' }),
@@ -180,7 +187,7 @@ function buildUi(root: HTMLElement): UiRefs {
     el('div', { class: 'brand' }, [el('span', { class: 'brand-mark', text: 'CSV' })]),
     el('div', { class: 'file-block' }, [fileName, dirtyChip]),
     el('div', { class: 'sep' }),
-    el('div', { class: 'group' }, [openBtn, saveBtn, saveAsBtn]),
+    el('div', { class: 'group' }, [newBtn, openBtn, saveBtn, saveAsBtn]),
     el('label', { class: 'toggle', title: t('toolbar.backupTitle') }, [
       backupToggle,
       backupToggleLabel,
@@ -245,13 +252,19 @@ function buildUi(root: HTMLElement): UiRefs {
     placeholder: t('editor.placeholder'),
   });
   const editorApply = el('button', { class: 'btn btn-primary', type: 'button', text: t('editor.apply') });
+  const editorClear = el('button', {
+    class: 'btn btn-danger',
+    type: 'button',
+    text: t('editor.clear'),
+    title: t('editor.clearTitle'),
+  });
   const editorRevert = el('button', { class: 'btn', type: 'button', text: t('editor.revert') });
   const editorHint = el('span', { class: 'editor-hint' });
 
   const cellEditor = el('section', { class: 'cell-editor' }, [
     el('div', { class: 'editor-head' }, [editorTitle, editorFlags]),
     el('div', { class: 'editor-body' }, [editorArea]),
-    el('div', { class: 'editor-foot' }, [editorApply, editorRevert, editorHint]),
+    el('div', { class: 'editor-foot' }, [editorApply, editorClear, editorRevert, editorHint]),
   ]);
 
   const status = el('span', { class: 'status-text' });
@@ -283,6 +296,8 @@ function buildUi(root: HTMLElement): UiRefs {
   return {
     fileName,
     dirtyChip,
+    newBtn,
+    newLabel,
     openBtn,
     openLabel,
     saveBtn,
@@ -312,6 +327,7 @@ function buildUi(root: HTMLElement): UiRefs {
     editorFlags,
     editorArea,
     editorApply,
+    editorClear,
     editorRevert,
     editorHint,
     status,
@@ -417,6 +433,9 @@ export class App {
       onActivate: (row, col) => this.openInlineEditor(row, col),
       onContextMenu: (row, col, x, y) => this.openCellMenu(row, col, x, y),
       onTypeToEdit: (row, col, initial) => this.openInlineEditor(row, col, initial),
+      onClear: () => this.clearSelection(),
+      onCopy: () => this.copySelection(),
+      onSelectionChange: () => this.updateSelectionReadout(),
     });
 
     this.wireEvents();
@@ -535,13 +554,15 @@ export class App {
   // ------------------------------------------------------------------ wiring
 
   private wireEvents(): void {
+    this.ui.newBtn.addEventListener('click', () => this.newDocument());
     this.ui.openBtn.addEventListener('click', () => void this.doOpen());
     this.ui.saveBtn.addEventListener('click', () => void this.saveActive());
     this.ui.saveAsBtn.addEventListener('click', () => void this.doSaveAs());
     this.ui.tabAddBtn.addEventListener('click', () => void this.doOpen());
     this.ui.undoBtn.addEventListener('click', () => this.undo());
     this.ui.redoBtn.addEventListener('click', () => this.redo());
-    this.ui.editorApply.addEventListener('click', () => this.commitEditorPanel());
+    this.ui.editorApply.addEventListener('click', () => this.applyEditorPanel());
+    this.ui.editorClear.addEventListener('click', () => this.clearSelection());
     this.ui.editorRevert.addEventListener('click', () => this.loadEditorPanel());
     this.ui.prevBtn.addEventListener('click', () => this.gotoMatch(-1));
     this.ui.nextBtn.addEventListener('click', () => this.gotoMatch(1));
@@ -586,7 +607,7 @@ export class App {
     this.ui.editorArea.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
-        this.commitEditorPanel();
+        this.applyEditorPanel();
       } else if (event.key === 'Escape') {
         event.preventDefault();
         this.loadEditorPanel();
@@ -647,6 +668,11 @@ export class App {
       event.preventDefault();
       this.ui.searchInput.focus();
       this.ui.searchInput.select();
+      return;
+    }
+    if (event.altKey && !mod && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      this.newDocument();
       return;
     }
     if (this.sessions.length === 0) return;
@@ -725,6 +751,8 @@ export class App {
   /** Re-label every static string after a language switch. */
   private relabel(): void {
     const ui = this.ui;
+    ui.newLabel.textContent = t('toolbar.new');
+    ui.newBtn.title = t('toolbar.newTitle');
     ui.openLabel.textContent = t('toolbar.open');
     ui.openBtn.title = t('toolbar.openTitle');
     ui.saveLabel.textContent = t('toolbar.save');
@@ -752,6 +780,8 @@ export class App {
     ui.prevBtn.textContent = t('search.prev');
     ui.nextBtn.textContent = t('search.next');
     ui.editorApply.textContent = t('editor.apply');
+    ui.editorClear.textContent = t('editor.clear');
+    ui.editorClear.title = t('editor.clearTitle');
     ui.editorRevert.textContent = t('editor.revert');
     ui.editorArea.placeholder = t('editor.placeholder');
     ui.langBtn.textContent = getLanguage() === 'zh' ? 'EN' : '中文';
@@ -771,12 +801,14 @@ export class App {
   // ------------------------------------------------------------------ welcome
 
   private welcomeHooks(): {
+    onNewFile(): void;
     onOpenFile(): void;
     onSample(): void;
     onLanguage(): void;
     onAbout(): void;
   } {
     return {
+      onNewFile: () => this.newDocument(),
       onOpenFile: () => void this.doOpen(),
       onSample: () => this.openSample(),
       onLanguage: () => void this.chooseLanguage(),
@@ -808,11 +840,40 @@ export class App {
     const session = new DocumentSession(this.nextSessionId, makeSampleDocument(420), this.nextAccent);
     this.nextSessionId += 1;
     this.nextAccent += 1;
+    session.origin = 'sample';
     this.sessions.push(session);
     this.activeIndex = this.sessions.length - 1;
     this.lastTabSignature = '';
     this.updateWelcomeState();
     this.syncActiveSession(true);
+  }
+
+  /** Start a brand-new empty document: no location yet, so the first save asks. */
+  private newDocument(): void {
+    if (this.editorDirty) this.commitEditorPanel();
+    const columns = 3;
+    const blankRow = (): Row => makeRow(new Array<string>(columns).fill(''), ',', 0, false);
+    const header = blankRow();
+    header.kind = 'header';
+    const doc: CsvDocument = {
+      fileName: t('newDoc.name'),
+      filePath: null,
+      delimiter: ',',
+      encoding: 'utf-8',
+      eol: '\r\n',
+      trailingEol: true,
+      rows: [header, blankRow()],
+    };
+    const session = new DocumentSession(this.nextSessionId, doc, this.nextAccent);
+    this.nextSessionId += 1;
+    this.nextAccent += 1;
+    session.origin = 'blank';
+    this.sessions.push(session);
+    this.activeIndex = this.sessions.length - 1;
+    this.lastTabSignature = '';
+    this.updateWelcomeState();
+    this.syncActiveSession(true);
+    toast(t('op.newCreated'), 'ok');
   }
 
   private async chooseLanguage(): Promise<void> {
@@ -1212,11 +1273,26 @@ export class App {
     this.editorDirty = false;
     this.ui.editorArea.value = cell ? cell.value : '';
 
-    this.ui.editorTitle.textContent = t('editor.title', {
-      r: this.selectedRow + 1,
-      c: this.selectedCol + 1,
-      name,
-    });
+    const range = this.grid.selectionRange;
+    if (range.cells > 1) {
+      this.ui.editorTitle.textContent = t('editor.rangeTitle', {
+        rows: range.rows,
+        cols: range.cols,
+        cells: range.cells,
+        r0: range.r0 + 1,
+        c0: range.c0 + 1,
+        r1: range.r1 + 1,
+        c1: range.c1 + 1,
+      });
+    } else {
+      this.ui.editorTitle.textContent = t('editor.title', {
+        r: this.selectedRow + 1,
+        c: this.selectedCol + 1,
+        name,
+      });
+    }
+    this.ui.editorApply.textContent =
+      range.cells > 1 ? t('editor.applyRange', { n: range.cells }) : t('editor.apply');
 
     const flags: string[] = [];
     if (!cell) {
@@ -1229,13 +1305,104 @@ export class App {
       if (cell.value.length === 0) flags.push(t('editor.flagEmpty'));
     }
     this.ui.editorFlags.textContent = flags.join(' · ');
-    this.ui.editorHint.textContent = cell ? t('editor.hint') : t('editor.hintMissing');
+    this.ui.editorHint.textContent =
+      range.cells > 1 ? t('editor.hintRange') : cell ? t('editor.hint') : t('editor.hintMissing');
   }
 
   private commitEditorPanel(): void {
     const value = this.ui.editorArea.value;
     this.editorDirty = false;
     this.editCell(this.editorRow, this.editorCol, value);
+  }
+
+  /**
+   * Explicit apply (the Apply button or Ctrl+Enter in the panel). With a
+   * multi-cell selection the same value is written into every cell of the block;
+   * with a single cell it is an ordinary edit.
+   */
+  private applyEditorPanel(): void {
+    const value = this.ui.editorArea.value;
+    this.editorDirty = false;
+    const range = this.grid.selectionRange;
+    if (range.cells > 1) {
+      this.applyValueToRange(value, range);
+      return;
+    }
+    this.editCell(this.editorRow, this.editorCol, value);
+  }
+
+  /** Write one value across a whole rectangular selection, recorded as per-cell undo steps. */
+  private applyValueToRange(value: string, range: GridRange): void {
+    let changed = 0;
+    for (let row = range.r0; row <= range.r1; row += 1) {
+      for (let col = range.c0; col <= range.c1; col += 1) {
+        const existing = this.doc.rows[row] ? this.doc.rows[row].cells[col] : undefined;
+        const before = existing ? existing.value : '';
+        if (!this.writeCell(row, col, value)) continue;
+        this.undoStack.push({ row, col, before, after: value });
+        changed += 1;
+      }
+    }
+    this.trimUndo();
+    if (changed > 0) this.afterCellChange(range.r0);
+    this.loadEditorPanel();
+    this.updateStatus();
+  }
+
+  /** Clear every cell in the selection (Delete key, Clear button, context menu). */
+  private clearSelection(): void {
+    if (this.sessions.length === 0) return;
+    const range = this.grid.selectionRange;
+    let cleared = 0;
+    for (let row = range.r0; row <= range.r1; row += 1) {
+      for (let col = range.c0; col <= range.c1; col += 1) {
+        const existing = this.doc.rows[row] ? this.doc.rows[row].cells[col] : undefined;
+        if (!existing || existing.value.length === 0) continue;
+        const before = existing.value;
+        if (!this.writeCell(row, col, '')) continue;
+        this.undoStack.push({ row, col, before, after: '' });
+        cleared += 1;
+      }
+    }
+    if (cleared === 0) return;
+    this.trimUndo();
+    this.afterCellChange(range.r0);
+    this.loadEditorPanel();
+    this.updateStatus();
+    toast(t('op.cleared', { n: cleared }), 'info');
+  }
+
+  /**
+   * Copy the selection as TSV. The grid turns off native text selection (so a
+   * drag selects cells instead of text), so this is the way to get data out.
+   */
+  private copySelection(): void {
+    if (this.sessions.length === 0) return;
+    const range = this.grid.selectionRange;
+    const lines: string[] = [];
+    for (let row = range.r0; row <= range.r1; row += 1) {
+      const data = this.doc.rows[row];
+      const parts: string[] = [];
+      for (let col = range.c0; col <= range.c1; col += 1) {
+        const cell = data ? data.cells[col] : undefined;
+        parts.push(cell ? cell.value.replace(/\r\n|\r|\n/g, ' ') : '');
+      }
+      lines.push(parts.join('\t'));
+    }
+    void navigator.clipboard?.writeText(lines.join('\n'));
+    toast(t('op.copied', { n: range.cells }), 'ok');
+  }
+
+  /** Called while a drag extends the selection; never clobbers in-progress typing. */
+  private updateSelectionReadout(): void {
+    if (this.sessions.length === 0) return;
+    if (this.editorDirty) return;
+    this.loadEditorPanel();
+  }
+
+  private trimUndo(): void {
+    this.redoStack.length = 0;
+    if (this.undoStack.length > 500) this.undoStack.splice(0, this.undoStack.length - 500);
   }
 
   private openInlineEditor(row: number, col: number, initial?: string): void {
@@ -1339,6 +1506,7 @@ export class App {
 
   private openCellMenu(row: number, col: number, x: number, y: number): void {
     const cell = this.doc.rows[row]?.cells[col];
+    const range = this.grid.selectionRange;
     const items: MenuItem[] = [
       { label: t('cellMenu.edit'), hint: t('hint.f2'), action: () => this.openInlineEditor(row, col) },
       {
@@ -1350,11 +1518,17 @@ export class App {
           toast(t('cellMenu.copyDone'), 'ok');
         },
       },
-      {
-        label: t('cellMenu.clear'),
-        disabled: !cell || cell.value.length === 0,
-        action: () => this.editCell(row, col, ''),
-      },
+      range.cells > 1
+        ? {
+            label: t('cellMenu.clearRange', { n: range.cells }),
+            danger: true,
+            action: () => this.clearSelection(),
+          }
+        : {
+            label: t('cellMenu.clear'),
+            disabled: !cell || cell.value.length === 0,
+            action: () => this.editCell(row, col, ''),
+          },
       { label: '-' },
       { label: t('cellMenu.rowAbove'), action: () => this.insertRow(row) },
       { label: t('cellMenu.rowBelow'), action: () => this.insertRow(row + 1) },
@@ -1374,9 +1548,12 @@ export class App {
 
   private insertRow(at: number): void {
     const reference = this.doc.rows[Math.max(0, Math.min(this.doc.rows.length - 1, at - 1))];
-    const fieldCount = reference
-      ? Math.max(reference.origFieldCount, reference.cells.length)
-      : columnCount(this.doc);
+    const fieldCount = Math.max(
+      1,
+      reference
+        ? Math.max(reference.origFieldCount, reference.cells.length)
+        : columnCount(this.doc),
+    );
     const values = new Array<string>(fieldCount).fill('');
     this.doc.rows.splice(at, 0, makeRow(values, this.doc.delimiter, 0, false));
     this.applyFilter();
@@ -1607,7 +1784,7 @@ export class App {
   /** Save one specific session (not necessarily the visible one). */
   private async saveSession(session: DocumentSession): Promise<boolean> {
     if (session.fileHandle === null) {
-      if (session.loadedText === null) {
+      if (session.isSample) {
         toast(t('sample.only'), 'warn');
         return false;
       }
@@ -1838,7 +2015,8 @@ export class App {
   // ------------------------------------------------------------------ status
 
   private channelText(): string {
-    if (this.loadedText === null) return t('channel.sample');
+    if (this.session.isSample) return t('channel.sample');
+    if (this.session.isBlank) return t('channel.blank');
     if (this.fileHandle === null || !canWriteInPlace()) return t('channel.readonly');
     return t('channel.writable');
   }
