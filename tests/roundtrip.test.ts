@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -360,4 +360,48 @@ test('改动单元格引入逗号/换行时会被正确加引号并仍可解析'
   const reparsed = parseCsvBytes(serializeCsvBytes(parsed.doc), RULES);
   assert.equal(reparsed.doc.rows[5].cells[1].value, '含,逗号\n以及换行');
   assert.equal(reparsed.doc.rows[5].cells[1].quoted, true);
+});
+
+// ---------------------------------------------------------------- legacy GBK
+// Excel on a Chinese Windows saves CSV as CP936 (GBK). GBK is a subset of
+// GB18030, so the decoder handles both; the encoder is a reverse table built
+// from the platform decoder. Those files must round-trip byte for byte too.
+
+const GBK_SAMPLE = join(WORKSPACE, 'project-ember-dungeon', 'melee-weapon.csv');
+
+test('GBK/GB18030：Excel 保存的文件能被正确识别并逐字节往返', () => {
+  if (!existsSync(GBK_SAMPLE)) return; // 真实样本不在本机时跳过
+  const original = readFileSync(GBK_SAMPLE);
+
+  const decoded = decodeBytes(original);
+  assert.equal(decoded.encoding, 'gb18030', '应识别为 GB18030/GBK');
+  assert.equal(decoded.validUtf8, false, '它不是合法 UTF-8');
+  assert.match(decoded.text, /名称,伤害类型/, '中文应正确解码，而不是乱码');
+
+  const parsed = parseCsvBytes(original, GBK_SAMPLE);
+  assertBytesEqual(serializeCsvBytes(parsed.doc), original, 'GBK 文件无改动往返');
+});
+
+test('GBK/GB18030：改动一个单元格后仍按原编码写回，其余内容不变', () => {
+  if (!existsSync(GBK_SAMPLE)) return;
+  const original = readFileSync(GBK_SAMPLE);
+  const parsed = parseCsvBytes(original, GBK_SAMPLE);
+  assert.equal(parsed.doc.encoding, 'gb18030');
+
+  const lines = parsed.text.split('\r\n');
+  assert.ok(lines.length > 2, '样本应有多行');
+  const editedLine = `匕首改${lines[2].slice(2)}`;
+  lines[2] = editedLine;
+
+  setCellValue(parsed.doc.rows[2].cells[0], '匕首改', parsed.doc.delimiter);
+  const out = serializeCsvBytes(parsed.doc);
+
+  const outDecoded = decodeBytes(out);
+  assert.equal(outDecoded.encoding, 'gb18030', '写回必须沿用 GB18030');
+  assert.equal(outDecoded.text, lines.join('\r\n'), '只有被改的那一格应发生变化');
+});
+
+test('UTF-8 中文文件不会被误判为 GBK', () => {
+  const parsed = parseCsvBytes(readFileSync(RULES), RULES);
+  assert.equal(parsed.doc.encoding, 'utf-8');
 });

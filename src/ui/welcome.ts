@@ -79,7 +79,7 @@ export function renderWelcome(host: HTMLElement, hooks: WelcomeHooks): void {
       grid,
       el('p', {
         class: 'welcome-foot',
-        text: `${t('welcome.version', { v: '0.1.2' })} · ${t('app.dropHint')}`,
+        text: `${t('welcome.version', { v: '0.1.3' })} · ${t('app.dropHint')}`,
       }),
     ]),
   );

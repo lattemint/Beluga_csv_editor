@@ -33,6 +33,11 @@ export class DocumentSession {
 
   /** Write-back target; null for the built-in sample document. */
   fileHandle: FileSystemFileHandle | null = null;
+  /**
+   * Filesystem path for sessions opened through the OS (file association).
+   * Only set when `fileHandle` is null; saving then goes through the Rust side.
+   */
+  filePath: string | null = null;
   /** Where the .bak goes — asked once per file, then reused silently. */
   backupHandle: FileSystemFileHandle | null = null;
   /** Decoded text of the opened file, kept so a delimiter change can re-parse. */

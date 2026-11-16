@@ -350,7 +350,9 @@ export function parseCsvText(text: string, fileName: string, options: ParseOptio
 export function parseCsvBytes(bytes: Uint8Array, fileName: string): ParsedCsv {
   const decoded = decodeBytes(bytes);
   const parsed = parseCsvText(decoded.text, fileName, { encoding: decoded.encoding });
-  if (!decoded.validUtf8 && decoded.encoding === 'utf-8') {
+  if (decoded.encoding === 'gb18030') {
+    parsed.warnings.push('文件是 GB18030/GBK 编码（Excel 常见）；保存时会用相同编码写回');
+  } else if (!decoded.validUtf8 && decoded.encoding === 'utf-8') {
     parsed.warnings.push('文件不是合法 UTF-8，可能使用了其他编码；写回可能无法保持逐字节一致');
   }
   return parsed;

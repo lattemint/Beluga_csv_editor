@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>probe K — startup file via Tauri IPC (GBK)</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { App } from '../src/ui/app.js';
+
+      // 真实 Excel 保存的 GBK 样本（378 字节）：
+      //   名称,伤害类型,攻速,...\r\n匕首,锐2,,,...
+      const GBK_B64 =
+        'w/uzxizJy7qmwODQzSy5pcvZLMnLuqYstMG0zLmlu/csu9O/s7mlu/csvuDA67Hktq8wLjUsvuDA67Hktq8xDQrYsMrXLMjxMiwsLCssLCwNCrbMvaMsyPEyLCwsLCwsDQrIrcjQLMjxMiwsLCwsLA0Ku7fI0CzI8TEsLCwsLCwNCrakzbe0uCzI8TG22zEsLCwsLCwNCiwsLCwsLCwNCrmkvt+0uCy22zEsLCwsLCwNCiwsLCwsLCwNCrWlyta9oyzI8TIsLCwsLCwNCs7kyr+1tiwsLCwsLCwNCrrhtbYsLCwsLCwsDQq/s7W2LCwsLCwsLA0KwMfRwLD0LCwsLCwsLA0KtMy9oywsLCwsLCwNCrOkw6wsLCwsLCwsDQq4q8e5LCwsLCwsLA0KLCwsLCwsLA0Ky6vK1r2jLCwsLCwsLA0KtPPMq7W2LCwsLCwsLA0Kw+e1tiwsLCwsLCwNCsGttbYsLCwsLCwsDQrD57W2LCwsLCwsLA0K';
+
+      function fromBase64(b64) {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+        return out;
+      }
+
+      const lines = [];
+      let pass = 0;
+      let fail = 0;
+      function check(name, ok, extra = '') {
+        if (ok) {
+          pass += 1;
+          lines.push(`PASS  ${name}`);
+        } else {
+          fail += 1;
+          lines.push(`FAIL  ${name}${extra ? '  → ' + extra : ''}`);
+        }
+      }
+
+      const calls = [];
+      let written = null;
+      let copied = null;
+      window.__TAURI__ = {
+        core: {
+          invoke: async (cmd, args) => {
+            calls.push(cmd);
+            switch (cmd) {
+              case 'take_startup_files':
+                return ['C:\\fake\\melee-weapon.csv'];
+              case 'read_file_bytes':
+                return Array.from(fromBase64(GBK_B64));
+              case 'stat_file':
+                return { size: 378, mtime: 1700000000000 };
+              case 'copy_file':
+                copied = args;
+                return null;
+              case 'write_file_bytes':
+                written = args;
+                return null;
+              default:
+                throw new Error('unexpected command ' + cmd);
+            }
+          },
+        },
+      };
+
+      async function waitFor(fn, ms = 6000) {
+        const start = performance.now();
+        while (performance.now() - start < ms) {
+          const value = fn();
+          if (value) return value;
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        return null;
+      }
+
+      try {
+        const app = new App(document.getElementById('app'));
+
+        // 1) 启动后应该自动去问 OS 要文件路径
+        const dialog = await waitFor(() => document.querySelector('.modal'));
+        check('1 启动时请求了 startup 文件', calls.includes('take_startup_files'), calls.join(','));
+        check('2 自动弹出了打开对话框', !!dialog);
+
+        // 2) 对话框里应显示 GB18030 编码
+        const meta = dialog ? dialog.textContent : '';
+        check('3 编码显示为 GB18030 (GBK)', meta.includes('GB18030'), meta.slice(0, 120));
+
+        // 3) 确认打开
+        const openBtn = [...document.querySelectorAll('.modal-footer .btn')].find((b) =>
+          b.textContent.trim().startsWith('打开'),
+        );
+        check('4 对话框有「打开」按钮', !!openBtn);
+        openBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        const opened = await waitFor(() => (app.sessionCount === 1 ? true : null));
+        check('5 文件已作为会话打开', opened === true, 'sessions=' + app.sessionCount);
+
+        const doc = app.document;
+        check('6 编码识别为 gb18030', doc.encoding === 'gb18030', doc.encoding);
+        check('7 中文正确解码', doc.rows[0]?.cells[0]?.value === '名称', doc.rows[0]?.cells[0]?.value);
+        check('8 第二行首格正确', doc.rows[1]?.cells[0]?.value === '匕首', doc.rows[1]?.cells[0]?.value);
+        check('9 行数合理', doc.rows.length > 5, 'rows=' + doc.rows.length);
+
+        // 4) 路径来源的会话应显示"可原地保存"
+        const badge = document.querySelector('.proto-badge');
+        check('10 通道徽章为可原地保存', (badge?.textContent ?? '').includes('可原地保存'), badge?.textContent);
+
+        // 5) GBK 提示应该出现
+        const toast = [...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ');
+        check('11 有 GB18030 提示', toast.includes('GB18030'), toast.slice(0, 120));
+
+        // 6) 改一格并保存：应走 Rust 写回，且字节仍是 GBK
+        const cell = doc.rows[1].cells[0];
+        app.editCell(1, 0, '匕首改');
+        check('12 编辑已生效', cell.value === '匕首改', cell.value);
+        await app.saveActive();
+
+        check('13 调用了 copy_file 备份', !!copied, JSON.stringify(copied));
+        check('14 调用了 write_file_bytes', !!written, calls.join(','));
+        if (written) {
+          const out = new Uint8Array(written.contents);
+          const text = new TextDecoder('gb18030').decode(out);
+          check('15 写回路径正确', written.path === 'C:\\fake\\melee-weapon.csv', String(written.path));
+          check('16 写回仍是 GBK 字节', out[0] === 0xc3 && out[1] === 0xfb, out[0] + ',' + out[1]);
+          check('17 改动出现在写回内容里', text.includes('匕首改'), text.slice(0, 40));
+          check('18 未改动内容保留', text.includes('名称,伤害类型'), text.slice(0, 40));
+        }
+      } catch (error) {
+        fail += 1;
+        lines.push('FAIL  探针异常：' + (error && error.stack ? error.stack : error));
+      }
+
+      const report = `probe-k: ${pass} passed, ${fail} failed\n\n${lines.join('\n')}\n`;
+      document.title = fail === 0 ? `PROBE-K-PASS ${pass}` : `PROBE-K-FAIL ${fail}`;
+      const pre = document.createElement('pre');
+      pre.id = 'report';
+      pre.textContent = report;
+      document.body.append(pre);
+      try {
+        await fetch('/__report?name=probe-k', { method: 'POST', body: report });
+      } catch (error) {
+        /* the DOM copy still carries the result */
+      }
+    </script>
+  </body>
+</html>

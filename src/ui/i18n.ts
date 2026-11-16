@@ -213,7 +213,7 @@ const zh = {
 
   'about.title': '关于 Beluga CSV Editor',
   'about.body':
-    '版本 0.1.2\n\n主要创作者：DeepSeek AI（deepseek-v4-pro）\n在用户LatteMint的测试与需求指导下开发\n\n许可证：MIT License\n（完整文本见项目 LICENSE 文件）\n\n为 Starsector mod 数据文件打造的 CSV 编辑器：\n保证未改动的内容逐字节写回原文件。',
+    '版本 0.1.3\n\n主要创作者：DeepSeek AI（deepseek-v4-pro）\n在用户LatteMint的测试与需求指导下开发\n\n许可证：MIT License\n（完整文本见项目 LICENSE 文件）\n\n为 Starsector mod 数据文件打造的 CSV 编辑器：\n保证未改动的内容逐字节写回原文件。',
 
   'grid.absent': '此行在原文件中只有 {n} 个字段',
   'grid.mlBadge': '{n} 行内容',
@@ -240,6 +240,12 @@ const zh = {
   'op.cleared': '已清空 {n} 格',
   'op.copied': '已复制 {n} 格',
   'op.newCreated': '已新建空白文件',
+
+  // --- legacy encoding (GB18030 / GBK) ---
+  'enc.title': '有字符无法用 GB18030 表示',
+  'enc.msg':
+    '文件是 GB18030（GBK）编码，但内容里有该编码表示不了的字符：{chars}。改用 UTF-8 保存吗？（依赖 GBK 的程序可能读不了）',
+  'enc.asUtf8': '改用 UTF-8 保存',
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
@@ -443,7 +449,7 @@ const en: Record<keyof typeof zh, string> = {
 
   'about.title': 'About Beluga CSV Editor',
   'about.body':
-    "Version 0.1.2\n\nMain author: DeepSeek AI (deepseek-v4-pro)\nDeveloped with LatteMint's testing and direction\n\nLicense: MIT License\n(full text in the project's LICENSE file)\n\nA CSV editor for Starsector mod data files that\nguarantees untouched content is written back byte for byte.",
+    "Version 0.1.3\n\nMain author: DeepSeek AI (deepseek-v4-pro)\nDeveloped with LatteMint's testing and direction\n\nLicense: MIT License\n(full text in the project's LICENSE file)\n\nA CSV editor for Starsector mod data files that\nguarantees untouched content is written back byte for byte.",
 
   'grid.absent': 'This row has only {n} field(s) in the source file',
   'grid.mlBadge': '{n} lines',
@@ -470,6 +476,12 @@ const en: Record<keyof typeof zh, string> = {
   'op.cleared': 'Cleared {n} cell(s)',
   'op.copied': 'Copied {n} cell(s)',
   'op.newCreated': 'Created a blank file',
+
+  // --- legacy encoding (GB18030 / GBK) ---
+  'enc.title': 'Some characters cannot be encoded as GB18030',
+  'enc.msg':
+    'This file is GB18030 (GBK), but it contains characters that encoding cannot represent: {chars}. Save as UTF-8 instead? (Programs that expect GBK may not read it.)',
+  'enc.asUtf8': 'Save as UTF-8',
 };
 
 export type MessageKey = keyof typeof zh;

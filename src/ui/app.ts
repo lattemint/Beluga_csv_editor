@@ -49,6 +49,16 @@ import {
 import type { ParsedCsv } from '../core/parse.ts';
 import { detectDelimiter, parseCsvBytes, parseCsvText, tokenizeRecords } from '../core/parse.ts';
 import { serializeCsvBytes, serializeRow } from '../core/serialize.ts';
+import { EncodingError } from '../core/bytes.ts';
+import {
+  baseName,
+  copyPath,
+  hasPathAccess,
+  readPathBytes,
+  statPath,
+  takeStartupFiles,
+  writePathBytes,
+} from '../core/pathio.ts';
 import type { CellSnapshot, EditRecord } from '../core/session.ts';
 import {
   DocumentSession,
@@ -453,6 +463,9 @@ export class App {
       this.updateStatus();
       this.grid.scrollerElement.focus();
     }
+
+    // Launched by a file association ("Open with")? Open what the OS handed us.
+    if (initialDoc === undefined) void this.openStartupFiles();
   }
 
   // ------------------------------------------------ active-session accessors
@@ -1697,6 +1710,7 @@ export class App {
     this.nextAccent += 1;
     session.loadedText = parsed.text;
     session.fileHandle = loaded.handle;
+    session.filePath = loaded.path ?? null;
     session.mtime = loaded.mtime;
     session.size = loaded.size;
     // Baseline for outside-change detection, updated again after every save.
@@ -1726,7 +1740,7 @@ export class App {
     this.updateWelcomeState();
     this.syncActiveSession(true);
 
-    if (loaded.handle === null) {
+    if (loaded.handle === null && !loaded.path) {
       toast(t('open.readonly', { name: loaded.name }), 'warn');
     } else {
       toast(
@@ -1783,6 +1797,9 @@ export class App {
 
   /** Save one specific session (not necessarily the visible one). */
   private async saveSession(session: DocumentSession): Promise<boolean> {
+    if (session.fileHandle === null && session.filePath !== null) {
+      return this.saveByPath(session);
+    }
     if (session.fileHandle === null) {
       if (session.isSample) {
         toast(t('sample.only'), 'warn');
@@ -1820,7 +1837,8 @@ export class App {
         if (answer === 'saveAs') return this.doSaveAs();
       }
 
-      const bytes = serializeCsvBytes(session.doc);
+      const bytes = await this.serializeForSave(session);
+      if (bytes === null) return false;
       const backupNote = await this.writeBackup(session, handle);
       // The backup picker can sit open for a while; the file may have changed
       // again in that window, so check once more before overwriting.
@@ -1873,6 +1891,120 @@ export class App {
       }
       toast(t('save.failed', { error: describeError(error) }), 'warn');
       return false;
+    }
+  }
+
+  /**
+   * Serialise the document for writing. GB18030 cannot express every character
+   * (emoji, rare CJK extensions), so when that happens the user may switch the
+   * document to UTF-8 rather than being unable to save at all.
+   */
+  private async serializeForSave(session: DocumentSession): Promise<Uint8Array | null> {
+    try {
+      return serializeCsvBytes(session.doc);
+    } catch (error) {
+      if (!(error instanceof EncodingError)) throw error;
+      const answer = await showChoice(
+        t('enc.title'),
+        t('enc.msg', { chars: error.characters.join(' ') }),
+        [
+          { value: 'utf8', label: t('enc.asUtf8'), primary: true },
+          { value: 'cancel', label: t('dialog.cancel') },
+        ],
+      );
+      if (answer !== 'utf8') return null;
+      session.doc.encoding = 'utf-8';
+      if (session === this.session) this.updateStatus();
+      return serializeCsvBytes(session.doc);
+    }
+  }
+
+  /**
+   * Save a session opened by path (file association). The File System Access API
+   * cannot address a path, so writes go through the Rust side; the .bak is a
+   * sibling copy and outside changes are detected with the same size/mtime pair
+   * the handle path uses.
+   */
+  private async saveByPath(session: DocumentSession): Promise<boolean> {
+    const path = session.filePath;
+    if (path === null) return false;
+    const name = baseName(path);
+    try {
+      const before = await statPath(path);
+      if (
+        session.diskSize !== null &&
+        (before.size !== session.diskSize || before.mtime !== session.diskMtime)
+      ) {
+        const detail =
+          before.size !== session.diskSize
+            ? t('external.sizeChanged', { a: session.diskSize, b: before.size })
+            : t('external.mtimeOnly', { size: before.size, stamp: formatStamp(before.mtime) });
+        const answer = await showChoice(t('external.title'), t('external.msg', { name, detail }), [
+          { value: 'overwrite', label: t('choice.overwrite'), primary: true },
+          { value: 'saveAs', label: t('choice.saveAs') },
+          { value: 'cancel', label: t('dialog.cancel') },
+        ]);
+        if (answer === null || answer === 'cancel') return false;
+        if (answer === 'saveAs') {
+          if (session !== this.session) this.activateSession(this.sessions.indexOf(session));
+          return this.doSaveAs();
+        }
+      }
+
+      const bytes = await this.serializeForSave(session);
+      if (bytes === null) return false;
+
+      let backupNote = '';
+      let backupFailed = false;
+      if (this.ui.backupToggle.checked) {
+        try {
+          await copyPath(path, `${path}.bak`);
+          backupNote = t('save.backupWith', { name: `${name}.bak` });
+        } catch (error) {
+          backupFailed = true;
+          backupNote = t('save.backupFail', { error: describeError(error) });
+        }
+      }
+
+      await writePathBytes(path, bytes);
+      const after = await statPath(path);
+      session.diskSize = after.size;
+      session.diskMtime = after.mtime;
+      session.mtime = after.mtime;
+      session.size = after.size;
+      session.markSaved();
+      if (session === this.session) {
+        this.lastTabSignature = '';
+        this.renderTabs();
+        this.updateStatus();
+      }
+      toast(t('save.ok', { name, backup: backupNote }), backupFailed ? 'warn' : 'ok');
+      return true;
+    } catch (error) {
+      toast(t('save.failed', { error: describeError(error) }), 'warn');
+      return false;
+    }
+  }
+
+  /** Open the files the OS launched us with (file association / "Open with"). */
+  private async openStartupFiles(): Promise<void> {
+    if (!hasPathAccess()) return;
+    const paths = await takeStartupFiles();
+    for (const path of paths) {
+      try {
+        const bytes = await readPathBytes(path);
+        const stat = await statPath(path);
+        await this.applyLoaded({
+          handle: null,
+          path,
+          name: baseName(path),
+          bytes,
+          size: stat.size,
+          mtime: stat.mtime,
+        });
+      } catch (error) {
+        toast(t('open.failed', { error: describeError(error) }), 'warn');
+      }
     }
   }
 
@@ -1937,7 +2069,8 @@ export class App {
     if (this.sessions.length === 0) return false;
     const session = this.session;
     try {
-      const bytes = serializeCsvBytes(session.doc);
+      const bytes = await this.serializeForSave(session);
+      if (bytes === null) return false;
       const suggested = session.doc.fileName.toLowerCase().endsWith('.csv')
         ? session.doc.fileName
         : `${session.doc.fileName}.csv`;
@@ -2017,7 +2150,8 @@ export class App {
   private channelText(): string {
     if (this.session.isSample) return t('channel.sample');
     if (this.session.isBlank) return t('channel.blank');
-    if (this.fileHandle === null || !canWriteInPlace()) return t('channel.readonly');
+    if (this.fileHandle === null && this.session.filePath === null) return t('channel.readonly');
+    if (this.fileHandle !== null && !canWriteInPlace()) return t('channel.readonly');
     return t('channel.writable');
   }
 

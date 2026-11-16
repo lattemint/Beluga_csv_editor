@@ -11,6 +11,12 @@
 export interface LoadedFile {
   /** Null when the file came from the fallback <input> and cannot be written back. */
   handle: FileSystemFileHandle | null;
+  /**
+   * Real filesystem path, set when the OS opened the file for us (a file
+   * association passes a path, not a handle). Saving then goes through the Rust
+   * side instead of the File System Access API.
+   */
+  path?: string | null;
   name: string;
   bytes: Uint8Array;
   /** File.size — a real disambiguator when two open files share a name. */

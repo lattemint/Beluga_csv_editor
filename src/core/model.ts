@@ -18,7 +18,16 @@
 export type Delimiter = ',' | ';' | '\t' | '|';
 
 /** Text encodings we can preserve on write-back. */
-export type Encoding = 'utf-8' | 'utf-8-bom' | 'utf-16le' | 'utf-16be';
+export type Encoding =
+  | 'utf-8'
+  | 'utf-8-bom'
+  | 'utf-16le'
+  | 'utf-16be'
+  /**
+   * Chinese Windows / Excel legacy encoding. GBK is a strict subset of GB18030,
+   * so decoding as GB18030 handles GBK files as well.
+   */
+  | 'gb18030';
 
 /** Line ending styles we can preserve on write-back. */
 export type Eol = '\r\n' | '\n' | '\r';
@@ -105,6 +114,8 @@ export function encodingLabel(e: Encoding): string {
       return 'UTF-16 LE';
     case 'utf-16be':
       return 'UTF-16 BE';
+    case 'gb18030':
+      return 'GB18030 (GBK)';
     default:
       return e;
   }
